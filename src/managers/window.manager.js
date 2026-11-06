@@ -12,8 +12,6 @@ class WindowManager {
     this.currentDisplay = null;
     this.screenWatcher = null;
     this.desktopWatcher = null;
-    this.windowsZOrderKeeper = null;
-    this.windowsZOrderKeeperIntervalMs = 1000;
     this.lastActiveSpace = null;
     this.screenCaptureAvailabilityWatcher = null;
     this.isScreenBeingShared = false;
@@ -123,7 +121,6 @@ class WindowManager {
       this.setupWindowEventHandlers();
       this.setupScreenTracking();
       this.setupScreenCaptureAvailabilityWatcher();
-      this.startWindowsZOrderKeeper();
 
       // Make windows interactive by default so they are not click-through
       this.setInteractive(true);
@@ -684,13 +681,17 @@ class WindowManager {
       setTimeout(enforceAlwaysOnTop, 50);
     });
     
-    // Periodic enforcement every 3 seconds (more frequent)
+    // Periodic enforcement every 3 seconds. Deliberately does NOT call
+    // moveTop(): repeated z-order changes make a fullscreen app flicker.
+    // moveTop is only used on discrete events (blur/show/restore/display change).
     const periodicEnforcement = setInterval(() => {
       if (window.isDestroyed()) {
         clearInterval(periodicEnforcement);
         return;
       }
-      enforceAlwaysOnTop();
+      try {
+        window.setAlwaysOnTop(true);
+      } catch { /* ignore */ }
     }, 3000);
     
     logger.debug('Applied enhanced stealth measures with aggressive always-on-top', {
@@ -700,52 +701,6 @@ class WindowManager {
       visibleOnAllWorkspaces: true,
       skipTaskbar: true
     });
-  }
-
-  /**
-   * Windows-only z-order keeper.
-   *
-   * `alwaysOnTop` maps to HWND_TOPMOST on Windows, which keeps us above
-   * *normal* windows but not necessarily above a borderless/fullscreen window
-   * that has raised itself into the topmost band (Chrome/Edge fullscreen,
-   * many apps' F11 mode). Those transitions emit no event we can listen for,
-   * so re-assert the z-order on a short timer while windows are visible.
-   *
-   * This cannot beat exclusive-fullscreen DirectX apps: they bypass DWM
-   * composition entirely. Run those in borderless/windowed fullscreen.
-   */
-  startWindowsZOrderKeeper() {
-    if (process.platform !== 'win32' || this.windowsZOrderKeeper) return;
-
-    const raiseVisibleWindows = () => {
-      this.windows.forEach((window, type) => {
-        if (!window || window.isDestroyed() || !window.isVisible()) return;
-        try {
-          // setAlwaysOnTop re-asserts HWND_TOPMOST (it may be a no-op if
-          // Windows still considers the window topmost). moveTop then puts it
-          // at the very top of the z-order without activating or focusing it.
-          window.setAlwaysOnTop(true);
-          if (typeof window.moveTop === 'function') {
-            window.moveTop();
-          }
-        } catch (error) {
-          logger.debug('Windows z-order re-raise failed', { type, error: error.message });
-        }
-      });
-    };
-
-    raiseVisibleWindows();
-    this.windowsZOrderKeeper = setInterval(raiseVisibleWindows, this.windowsZOrderKeeperIntervalMs);
-    logger.info('Windows fullscreen z-order keeper started', {
-      intervalMs: this.windowsZOrderKeeperIntervalMs
-    });
-  }
-
-  stopWindowsZOrderKeeper() {
-    if (!this.windowsZOrderKeeper) return;
-    clearInterval(this.windowsZOrderKeeper);
-    this.windowsZOrderKeeper = null;
-    logger.info('Windows fullscreen z-order keeper stopped');
   }
 
   positionWindow(window, type) {
@@ -1589,8 +1544,6 @@ class WindowManager {
     this.windows.clear();
 
     // Clean up all watchers
-    this.stopWindowsZOrderKeeper();
-
     if (this.screenWatcher) {
       clearInterval(this.screenWatcher);
       this.screenWatcher = null;
