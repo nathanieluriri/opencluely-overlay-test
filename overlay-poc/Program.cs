@@ -8,7 +8,7 @@ internal static class Program
     private static readonly string LogDir =
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "OverlayPoc");
 
-    private static readonly string LogPath = Path.Combine(LogDir, "poc.log");
+    internal static readonly string LogPath = Path.Combine(LogDir, "poc.log");
 
     [STAThread]
     private static void Main()
