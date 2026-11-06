@@ -5,12 +5,67 @@ namespace OverlayPoc;
 
 internal static class Program
 {
+    private static readonly string LogDir =
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "OverlayPoc");
+
+    private static readonly string LogPath = Path.Combine(LogDir, "poc.log");
+
     [STAThread]
     private static void Main()
     {
-        Application.EnableVisualStyles();
-        Application.SetCompatibleTextRenderingDefault(false);
-        Application.Run(new OverlayForm());
+        try
+        {
+            Directory.CreateDirectory(LogDir);
+            Log("START (process alive)");
+
+            Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
+            Application.ThreadException += (_, e) => Fatal(e.Exception);
+            AppDomain.CurrentDomain.UnhandledException += (_, e) => Fatal(e.ExceptionObject as Exception);
+
+            Application.EnableVisualStyles();
+            Application.SetCompatibleTextRenderingDefault(false);
+
+            Log("Creating form");
+            Application.Run(new OverlayForm());
+            Log("EXIT normal");
+        }
+        catch (Exception ex)
+        {
+            Fatal(ex);
+        }
+    }
+
+    internal static void Log(string message)
+    {
+        try
+        {
+            File.AppendAllText(LogPath,
+                $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} {message}{Environment.NewLine}");
+        }
+        catch
+        {
+            // Logging must never take the app down.
+        }
+    }
+
+    private static void Fatal(Exception ex)
+    {
+        var text = ex?.ToString() ?? "Unknown fatal error";
+        Log("FATAL: " + text);
+
+        try
+        {
+            MessageBox.Show(
+                "OverlayPoc failed to start:\n\n" + (ex?.Message ?? text) +
+                "\n\nFull log:\n" + LogPath,
+                "OverlayPoc",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error);
+        }
+        catch
+        {
+            // Nothing else we can do.
+        }
     }
 }
 
@@ -54,6 +109,8 @@ internal sealed class OverlayForm : Form
 
     public OverlayForm()
     {
+        Program.Log("FORM ctor");
+
         FormBorderStyle = FormBorderStyle.None;
         StartPosition = FormStartPosition.Manual;
         ShowInTaskbar = false;
@@ -61,7 +118,7 @@ internal sealed class OverlayForm : Form
         BackColor = Color.FromArgb(235, 15, 15, 18);
         Opacity = 0.92;
 
-        var screen = Screen.PrimaryScreen.Bounds;
+        var screen = Screen.PrimaryScreen?.Bounds ?? new Rectangle(0, 0, 1280, 720);
         Bounds = new Rectangle(screen.Width / 2 - 240, 40, 480, 52);
 
         _status = new Label
@@ -70,7 +127,7 @@ internal sealed class OverlayForm : Form
             ForeColor = Color.Lime,
             TextAlign = ContentAlignment.MiddleCenter,
             Font = new Font("Segoe UI", 10.5f, FontStyle.Bold),
-            Text = "OVERLAY POC — checking..."
+            Text = "OVERLAY POC — starting..."
         };
         Controls.Add(_status);
 
@@ -82,25 +139,48 @@ internal sealed class OverlayForm : Form
         };
         var menu = new ContextMenuStrip();
         menu.Items.Add("Raise now", null, (_, _) => RaiseIfCovered());
+        menu.Items.Add("Open log", null, (_, _) =>
+        {
+            try { System.Diagnostics.Process.Start("notepad.exe", Program.LogPath); } catch { }
+        });
         menu.Items.Add("Exit", null, (_, _) => Close());
         _tray.ContextMenuStrip = menu;
 
         _timer = new System.Windows.Forms.Timer { Interval = 500 };
         _timer.Tick += (_, _) => RaiseIfCovered();
         _timer.Start();
+
+        Program.Log("FORM ctor done");
     }
 
     protected override void OnHandleCreated(EventArgs e)
     {
         base.OnHandleCreated(e);
 
-        var exStyle = GetWindowLong(Handle, GWL_EXSTYLE);
-        exStyle |= WS_EX_TOPMOST | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
-        SetWindowLong(Handle, GWL_EXSTYLE, exStyle);
+        try
+        {
+            var exStyle = GetWindowLong(Handle, GWL_EXSTYLE);
+            exStyle |= WS_EX_TOPMOST | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
+            SetWindowLong(Handle, GWL_EXSTYLE, exStyle);
 
-        _captureHidden = SetWindowDisplayAffinity(Handle, WDA_EXCLUDEFROMCAPTURE);
-        RaiseIfCovered();
-        UpdateStatus();
+            _captureHidden = SetWindowDisplayAffinity(Handle, WDA_EXCLUDEFROMCAPTURE);
+            Program.Log($"HANDLE created. captureHidden={_captureHidden}");
+
+            RaiseIfCovered();
+            UpdateStatus();
+        }
+        catch (Exception ex)
+        {
+            Program.Log("HANDLE error: " + ex);
+            throw;
+        }
+    }
+
+    protected override void OnShown(EventArgs e)
+    {
+        base.OnShown(e);
+        Program.Log("FORM shown");
+        _tray.ShowBalloonTip(3000, "Overlay POC", "Running. Right-click the tray icon to exit.", ToolTipIcon.Info);
     }
 
     private void RaiseIfCovered()
@@ -114,6 +194,7 @@ internal sealed class OverlayForm : Form
 
         SetWindowPos(Handle, HWND_TOPMOST, 0, 0, 0, 0,
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        Program.Log("Raised above covering window");
     }
 
     private void UpdateStatus()
@@ -125,6 +206,7 @@ internal sealed class OverlayForm : Form
 
     protected override void OnFormClosed(FormClosedEventArgs e)
     {
+        Program.Log("FORM closed");
         _timer?.Stop();
         if (_tray != null)
         {

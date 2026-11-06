@@ -18,14 +18,35 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
-      - name: Publish single-file exe
-        run: dotnet publish overlay-poc/OverlayPoc.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o overlay-poc/out
+      - name: Publish folder build
+        run: dotnet publish overlay-poc/OverlayPoc.csproj -c Release -r win-x64 --self-contained true -o overlay-poc/out
+
+      - name: Add instructions
+        shell: pwsh
+        run: |
+          @"
+          Overlay POC
+          ===========
+          1. Extract this whole folder somewhere.
+          2. If Windows blocks OverlayPoc.exe: right-click it -> Properties -> check Unblock -> OK.
+          3. Run OverlayPoc.exe.
+          4. A green bar should appear at the top center of the primary screen.
+          5. Exit via the tray icon -> Exit.
+
+          If nothing appears, open:
+            %LOCALAPPDATA%\OverlayPoc\poc.log
+          The log records every startup step and any crash.
+          "@ | Out-File -Encoding utf8 overlay-poc/out/README.txt
+
+      - name: Zip build
+        shell: pwsh
+        run: Compress-Archive -Path overlay-poc/out/* -DestinationPath overlay-poc/OverlayPoc.zip -Force
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: overlay-poc-win-x64
-          path: overlay-poc/out/OverlayPoc.exe
+          path: overlay-poc/OverlayPoc.zip
           if-no-files-found: error
 
       - name: Publish test release
@@ -34,4 +55,4 @@ jobs:
           tag_name: overlay-poc-${{ github.run_number }}
           name: Overlay POC ${{ github.run_number }}
           prerelease: true
-          files: overlay-poc/out/OverlayPoc.exe
+          files: overlay-poc/OverlayPoc.zip
