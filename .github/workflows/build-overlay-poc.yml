@@ -1,0 +1,37 @@
+name: Build Overlay POC
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Publish single-file exe
+        run: dotnet publish overlay-poc/OverlayPoc.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o overlay-poc/out
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: overlay-poc-win-x64
+          path: overlay-poc/out/OverlayPoc.exe
+          if-no-files-found: error
+
+      - name: Publish test release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          tag_name: overlay-poc-${{ github.run_number }}
+          name: Overlay POC ${{ github.run_number }}
+          prerelease: true
+          files: overlay-poc/out/OverlayPoc.exe
