@@ -530,7 +530,11 @@ internal sealed partial class OverlayForm : Form
     {
         try
         {
-            // Simulate Ctrl+C to copy the foreground app's selection.
+            // Release Shift first so the foreground app sees Ctrl+C, not
+            // Ctrl+Shift+C (which triggers browser element inspector).
+            keybd_event((byte)VK_SHIFT, 0, KEYEVENTF_KEYUP, IntPtr.Zero);
+            await Task.Delay(10);
+
             keybd_event((byte)VK_CONTROL, 0, 0, IntPtr.Zero);
             keybd_event((byte)VK_C, 0, 0, IntPtr.Zero);
             keybd_event((byte)VK_C, 0, KEYEVENTF_KEYUP, IntPtr.Zero);
