@@ -26,14 +26,8 @@ internal static class NativeMethods
     internal const uint GW_HWNDPREV = 3;
     internal const uint WDA_EXCLUDEFROMCAPTURE = 0x00000011;
 
-    internal const int WM_HOTKEY = 0x0312;
     internal const int WM_NCLBUTTONDOWN = 0x00A1;
     internal const int HTCAPTION = 2;
-
-    internal const uint MOD_CONTROL = 0x0002;
-    internal const uint MOD_SHIFT = 0x0004;
-    internal const uint MOD_NOREPEAT = 0x4000;
-    internal const int VK_O = 0x4F;
 
     internal static readonly IntPtr HWND_TOPMOST = new(-1);
 
@@ -51,6 +45,7 @@ internal static class NativeMethods
     internal const int VK_MENU = 0x12;
     internal const int VK_PAUSE = 0x13;
     internal const int VK_CAPITAL = 0x14;
+    internal const int VK_O = 0x4F;
     internal const int VK_ESCAPE = 0x1B;
     internal const int VK_SPACE = 0x20;
     internal const int VK_PRIOR = 0x21;
@@ -131,15 +126,6 @@ internal static class NativeMethods
 
     [DllImport("user32.dll", SetLastError = true)]
     internal static extern bool SetWindowDisplayAffinity(IntPtr hWnd, uint dwAffinity);
-
-    [DllImport("user32.dll")]
-    internal static extern bool SetForegroundWindow(IntPtr hWnd);
-
-    [DllImport("user32.dll", SetLastError = true)]
-    internal static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
-
-    [DllImport("user32.dll", SetLastError = true)]
-    internal static extern bool UnregisterHotKey(IntPtr hWnd, int id);
 
     [DllImport("user32.dll")]
     internal static extern bool ReleaseCapture();

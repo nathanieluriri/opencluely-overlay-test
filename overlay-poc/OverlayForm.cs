@@ -15,8 +15,6 @@ namespace OverlayPoc;
 /// </summary>
 internal sealed partial class OverlayForm : Form
 {
-    private const int HotkeyId = 1;
-
     private readonly Label _status;
     private readonly System.Windows.Forms.Timer _timer;
     private readonly NotifyIcon _tray;
@@ -98,8 +96,7 @@ internal sealed partial class OverlayForm : Form
 
             _captureHidden = SetWindowDisplayAffinity(Handle, WDA_EXCLUDEFROMCAPTURE);
 
-            var hotkeyRegistered = RegisterHotKey(
-                Handle, HotkeyId, MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, VK_O);
+            SetHook();
 
             if (_tray != null)
             {
@@ -108,7 +105,7 @@ internal sealed partial class OverlayForm : Form
                     : "Overlay POC";
             }
 
-            Program.Log($"HANDLE created. captureHidden={_captureHidden} hotkey={hotkeyRegistered}");
+            Program.Log($"HANDLE created. captureHidden={_captureHidden}");
 
             RaiseIfCovered();
             UpdateInteractionVisuals();
@@ -135,8 +132,6 @@ internal sealed partial class OverlayForm : Form
         Program.Log("FORM closed");
 
         ReleaseHook();
-
-        try { UnregisterHotKey(Handle, HotkeyId); } catch { }
 
         _timer?.Stop();
 
@@ -219,13 +214,28 @@ internal sealed partial class OverlayForm : Form
 
     private IntPtr KeyboardProc(int nCode, IntPtr wParam, IntPtr lParam)
     {
-        if (nCode < 0 || !_keyboardCaptureEnabled)
+        if (nCode < 0)
             return CallNextHookEx(_hookId, nCode, wParam, lParam);
 
         var kb = Marshal.PtrToStructure<KBDLLHOOKSTRUCT>(lParam);
 
-        // Never suppress modifier keys — they must reach the system so
-        // combos (including our own Ctrl+Shift+O) continue to work.
+        // ── Ctrl+Shift+O toggles capture (always active) ──────────
+        if (kb.vkCode == VK_O
+            && (wParam == (IntPtr)WM_KEYDOWN || wParam == (IntPtr)WM_SYSKEYDOWN))
+        {
+            var ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+            var shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+            if (ctrl && shift)
+            {
+                BeginInvoke(new Action(() => ToggleInteractive()));
+                return (IntPtr)1;
+            }
+        }
+
+        if (!_keyboardCaptureEnabled)
+            return CallNextHookEx(_hookId, nCode, wParam, lParam);
+
+        // Never suppress modifier keys.
         if (kb.vkCode is VK_SHIFT or VK_LSHIFT or VK_RSHIFT
             or VK_CONTROL or VK_LCONTROL or VK_RCONTROL
             or VK_MENU or VK_LMENU or VK_RMENU
@@ -233,18 +243,6 @@ internal sealed partial class OverlayForm : Form
             or VK_CAPITAL or VK_NUMLOCK or VK_SCROLL)
         {
             return CallNextHookEx(_hookId, nCode, wParam, lParam);
-        }
-
-        // Detect Ctrl+Shift+O in the hook so it works even while capturing.
-        if (kb.vkCode == VK_O)
-        {
-            var ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
-            var shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
-            if (ctrl && shift && (wParam == (IntPtr)WM_KEYDOWN || wParam == (IntPtr)WM_SYSKEYDOWN))
-            {
-                // Let the hotkey through so the RegisterHotKey path also fires.
-                return CallNextHookEx(_hookId, nCode, wParam, lParam);
-            }
         }
 
         if (wParam == (IntPtr)WM_KEYDOWN || wParam == (IntPtr)WM_SYSKEYDOWN)
@@ -269,15 +267,12 @@ internal sealed partial class OverlayForm : Form
 
                 default:
                 {
-                    var text = VkToText(kb.vkCode, kb.scanCode, kb.flags);
+                    var text = VkToText(kb.vkCode, kb.scanCode);
                     if (text.Length > 0)
                     {
                         BeginInvoke(new Action(() => AppendToInput(text)));
                     }
 
-                    // Suppress all character-producing keys (and navigation
-                    // keys that we don't explicitly handle) so the target
-                    // app never sees them.
                     return (IntPtr)1;
                 }
             }
@@ -286,28 +281,26 @@ internal sealed partial class OverlayForm : Form
         return CallNextHookEx(_hookId, nCode, wParam, lParam);
     }
 
-    /// <summary>
-    /// Translate a virtual-key / scan-code pair into a string using the
-    /// current keyboard layout. Returns an empty string for non-printable keys.
-    /// </summary>
-    private static string VkToText(uint vkCode, uint scanCode, uint flags)
+    private static string VkToText(uint vkCode, uint scanCode)
     {
-        // Build a keyboard-state snapshot.
         var keyState = new byte[256];
         GetKeyboardState(keyState);
 
-        // ToUnicode may alter the keyboard state for dead keys; work on a copy.
+        // Clear Ctrl states so the Ctrl+Shift+O toggle combo doesn't
+        // corrupt the first characters typed afterwards.
+        keyState[VK_CONTROL] = 0;
+        keyState[VK_LCONTROL] = 0;
+        keyState[VK_RCONTROL] = 0;
+
         var buf = new StringBuilder(8);
         var result = ToUnicode(vkCode, scanCode, keyState, buf, buf.Capacity, 0);
 
         if (result > 0)
             return buf.ToString(0, result);
 
-        // Dead key — the character is pending, not produced yet.
         if (result < 0)
             return "";
 
-        // No translation available; handle a few explicit cases.
         return vkCode switch
         {
             VK_SPACE => " ",
@@ -342,16 +335,9 @@ internal sealed partial class OverlayForm : Form
 
         _keyboardCaptureEnabled = !_keyboardCaptureEnabled;
 
-        if (_keyboardCaptureEnabled)
-        {
-            SetHook();
-            Program.Log("Keyboard capture ENABLED");
-        }
-        else
-        {
-            ReleaseHook();
-            Program.Log("Keyboard capture DISABLED");
-        }
+        Program.Log(_keyboardCaptureEnabled
+            ? "Keyboard capture ENABLED"
+            : "Keyboard capture DISABLED");
 
         // The window NEVER changes style — it stays transparent and
         // click-through regardless of capture state.
@@ -475,18 +461,5 @@ internal sealed partial class OverlayForm : Form
         {
             Program.Log("Open log failed: " + ex.Message);
         }
-    }
-
-    // ── WndProc (global hotkey) ───────────────────────────────────────
-
-    protected override void WndProc(ref Message m)
-    {
-        if (m.Msg == WM_HOTKEY && m.WParam.ToInt32() == HotkeyId)
-        {
-            ToggleInteractive();
-            return;
-        }
-
-        base.WndProc(ref m);
     }
 }
