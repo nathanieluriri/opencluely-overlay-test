@@ -1,226 +1,358 @@
+using System.Diagnostics;
 using System.Drawing;
+using System.Runtime.InteropServices;
+using System.Text;
 using System.Windows.Forms;
 using OverlayPoc.Chat;
+using static OverlayPoc.NativeMethods;
 
 namespace OverlayPoc;
 
-internal sealed partial class OverlayForm
+/// <summary>
+/// Always-on-top overlay window. It is click-through and non-activating by
+/// default; Ctrl+Shift+O (or the tray menu) unlocks it for typing and dragging.
+/// UI construction lives in OverlayForm.Ui.cs, chat logic in OverlayForm.Chat.cs.
+/// </summary>
+internal sealed partial class OverlayForm : Form
 {
-    private const int CardPadding = 12;
-    private const int CardHeaderHeight = 22;
-    private const int CardSpacing = 10;
+    private const int HotkeyId = 1;
+    private const int IdleLockMilliseconds = 20000;
 
-    private int _lastMessagesWidth;
-    private bool _rendering;
+    private readonly Label _status;
+    private readonly System.Windows.Forms.Timer _timer;
+    private readonly NotifyIcon _tray;
+    private readonly Panel _header = new();
+    private readonly Panel _content = new();
+    private readonly FlowLayoutPanel _messages = new();
+    private readonly TextBox _input = new();
+    private readonly ListBox _history = new();
+    private readonly List<ChatConversation> _conversations = new();
 
-    private void OnHistorySelectionChanged(object sender, EventArgs e)
+    private Button _interactiveButton;
+    private Label _titleLabel;
+    private ChatConversation _currentConversation;
+    private IntPtr _lastForegroundWindow;
+    private string _lastForegroundTitle = "Waiting for active app";
+    private Size _restoredSize = new(760, 620);
+    private bool _captureHidden;
+    private bool _interactive;
+    private bool _compact;
+    private bool _maximized;
+    private bool _suppressHistorySelection;
+    private bool _globalKeyboardLoggerEnabled;
+
+    public OverlayForm()
     {
-        if (_suppressHistorySelection) return;
+        Program.Log("FORM ctor");
 
-        if (_history.SelectedItem is ChatConversation conversation)
+        FormBorderStyle = FormBorderStyle.None;
+        StartPosition = FormStartPosition.Manual;
+        ShowInTaskbar = false;
+        TopMost = true;
+        BackColor = Theme.Background;
+        Opacity = 0.97;
+        DoubleBuffered = true;
+
+        var screen = Screen.PrimaryScreen?.Bounds ?? new Rectangle(0, 0, 1280, 720);
+        Bounds = new Rectangle(
+            screen.Width / 2 - _restoredSize.Width / 2,
+            40,
+            _restoredSize.Width,
+            _restoredSize.Height);
+
+        _status = new Label
         {
-            _currentConversation = conversation;
-            RenderConversation();
-        }
-    }
-
-    private void StartConversation()
-    {
-        var conversation = new ChatConversation("New conversation");
-        _conversations.Insert(0, conversation);
-
-        _suppressHistorySelection = true;
-        _history.Items.Insert(0, conversation);
-        _history.SelectedIndex = 0;
-        _suppressHistorySelection = false;
-
-        _currentConversation = conversation;
-        _input.Clear();
-        RenderConversation();
-        _input.Focus();
-    }
-
-    private void SendMessage()
-    {
-        var text = _input.Text.Trim();
-        if (text.Length == 0 || _currentConversation is null) return;
-
-        _currentConversation.Messages.Add(new ChatMessage(false, text));
-
-        if (_currentConversation.Messages.Count == 1)
-        {
-            _currentConversation.Title = text.Length > 28 ? text[..28] + "…" : text;
-            RefreshSelectedHistoryItem();
-        }
-
-        _currentConversation.Messages.Add(new ChatMessage(true,
-            "This prototype does not have an assistant service connected yet. " +
-            "Your conversation is kept in memory until the app closes."));
-
-        _input.Clear();
-        RenderConversation();
-
-        // Sending ends typing mode: the overlay goes back to click-through and
-        // focus returns to whatever the user was doing.
-        if (_interactive) ToggleInteractive();
-    }
-
-    private void OnComposerKeyDown(object sender, KeyEventArgs e)
-    {
-        if (e.KeyCode == Keys.Escape)
-        {
-            e.SuppressKeyPress = true;
-            if (_interactive) ToggleInteractive();
-            return;
-        }
-
-        if (e.KeyCode == Keys.Enter && !e.Shift)
-        {
-            e.SuppressKeyPress = true;
-            SendMessage();
-        }
-    }
-
-    private void OnMessagesSizeChanged(object sender, EventArgs e)
-    {
-        if (_rendering) return;
-
-        var width = _messages.ClientSize.Width;
-        if (width <= 0) return;
-
-        // A vertical scrollbar also changes ClientSize.Width. The threshold
-        // ignores that 17px change so the conversation does not rebuild in a
-        // loop; real window resizes still reflow every card.
-        if (Math.Abs(width - _lastMessagesWidth) < 20) return;
-
-        _lastMessagesWidth = width;
-        RenderConversation();
-    }
-
-    private void RefreshSelectedHistoryItem()
-    {
-        var index = _history.SelectedIndex;
-        if (index < 0) return;
-
-        _suppressHistorySelection = true;
-        _history.Items[index] = _currentConversation;
-        _history.SelectedIndex = index;
-        _suppressHistorySelection = false;
-    }
-
-    private void RenderConversation()
-    {
-        if (_currentConversation is null || _rendering) return;
-
-        _rendering = true;
-        _messages.SuspendLayout();
-        try
-        {
-            // Controls.Clear() alone leaves the old controls alive; dispose them
-            // so switching conversations does not leak handles.
-            var previous = _messages.Controls.Cast<Control>().ToArray();
-            _messages.Controls.Clear();
-            foreach (var control in previous) control.Dispose();
-
-            foreach (var message in _currentConversation.Messages)
-            {
-                _messages.Controls.Add(CreateMessageCard(message));
-            }
-        }
-        finally
-        {
-            _messages.ResumeLayout();
-            _rendering = false;
-        }
-
-        if (_messages.Controls.Count > 0)
-        {
-            _messages.ScrollControlIntoView(
-                _messages.Controls[_messages.Controls.Count - 1]);
-        }
-    }
-
-    /// <summary>
-    /// Builds a card with an explicit size instead of AutoSize. AutoSize panels
-    /// containing docked children were the reason messages rendered with the
-    /// wrong width and clipped text.
-    /// </summary>
-    private Control CreateMessageCard(ChatMessage message)
-    {
-        var cardWidth = Math.Max(240, _messages.ClientSize.Width - 30);
-        var textWidth = Math.Max(180, cardWidth - CardPadding * 2);
-
-        Label body = null;
-        var bodyHeight = 0;
-
-        if (!message.Collapsed)
-        {
-            body = new Label
-            {
-                AutoSize = true,
-                MaximumSize = new Size(textWidth, 0),
-                Text = message.Text,
-                ForeColor = Theme.TextPrimary,
-                Font = Theme.Body,
-                Location = new Point(CardPadding, CardPadding + CardHeaderHeight)
-            };
-
-            // Let the label itself decide how tall the wrapped text is; using a
-            // separate TextRenderer measurement clipped long messages.
-            bodyHeight = body.PreferredSize.Height + 6;
-        }
-
-        var card = new Panel
-        {
-            Width = cardWidth,
-            Height = CardPadding * 2 + CardHeaderHeight + bodyHeight,
-            Margin = new Padding(0, 0, 0, CardSpacing),
-            BackColor = message.IsAssistant ? Theme.InputBackground : Theme.UserBubble
-        };
-
-        var name = new Label
-        {
-            AutoSize = false,
-            Text = message.IsAssistant ? "ASSISTANT" : "YOU",
-            ForeColor = message.IsAssistant ? Theme.AssistantAccent : Theme.UserAccent,
-            Font = Theme.CaptionBold,
-            Location = new Point(CardPadding, CardPadding),
-            Size = new Size(textWidth - 32, 18),
+            AutoSize = true,
+            ForeColor = Theme.TextSecondary,
+            Font = Theme.BodySmall,
+            Text = _lastForegroundTitle,
             TextAlign = ContentAlignment.MiddleLeft
         };
 
-        var toggle = new Button
+        BuildInterface();
+        EnableDrag(_header);
+        EnableDrag(_messages);
+
+        _tray = CreateTrayIcon();
+        _timer = CreateFocusTimer();
+
+        Program.Log("FORM ctor done");
+    }
+
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+
+        try
         {
-            Text = message.Collapsed ? "+" : "−",
-            FlatStyle = FlatStyle.Flat,
-            BackColor = card.BackColor,
-            ForeColor = Theme.TextSecondary,
-            Font = Theme.Glyph,
-            Cursor = Cursors.Hand,
-            Size = new Size(24, 20),
-            Location = new Point(cardWidth - CardPadding - 24, CardPadding),
-            TabStop = false,
-            FlatAppearance = { BorderSize = 0 }
+            var exStyle = GetWindowLong(Handle, GWL_EXSTYLE);
+            exStyle |= WS_EX_TOPMOST | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
+            SetWindowLong(Handle, GWL_EXSTYLE, exStyle);
+
+            _captureHidden = SetWindowDisplayAffinity(Handle, WDA_EXCLUDEFROMCAPTURE);
+
+            var hotkeyRegistered = RegisterHotKey(
+                Handle, HotkeyId, MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, VK_O);
+
+            if (_tray != null)
+            {
+                _tray.Text = _captureHidden
+                    ? "Overlay POC (hidden from screen capture)"
+                    : "Overlay POC";
+            }
+
+            Program.Log($"HANDLE created. captureHidden={_captureHidden} hotkey={hotkeyRegistered}");
+
+            RaiseIfCovered();
+            UpdateInteractionVisuals();
+        }
+        catch (Exception ex)
+        {
+            Program.Log("HANDLE error: " + ex);
+            throw;
+        }
+    }
+
+    protected override void OnShown(EventArgs e)
+    {
+        base.OnShown(e);
+        Program.Log("FORM shown");
+        _tray.ShowBalloonTip(3000, "Focus chat",
+            "Ctrl+Shift+O unlocks the overlay for typing and dragging.", ToolTipIcon.Info);
+        UpdateFocusTarget();
+    }
+
+    private NotifyIcon CreateTrayIcon()
+    {
+        var menu = new ContextMenuStrip();
+        menu.Items.Add("Show overlay", null, (_, _) =>
+        {
+            Show();
+            RaiseIfCovered();
+        });
+        menu.Items.Add("Raise now", null, (_, _) => RaiseIfCovered());
+        menu.Items.Add("Toggle interactive (Ctrl+Shift+O)", null, (_, _) => ToggleInteractive());
+        menu.Items.Add("Open log", null, (_, _) => OpenLog());
+        menu.Items.Add("Exit", null, (_, _) => Close());
+
+        return new NotifyIcon
+        {
+            Icon = SystemIcons.Application,
+            Visible = true,
+            Text = "Overlay POC",
+            ContextMenuStrip = menu
         };
+    }
 
-        toggle.Click += (_, _) =>
+    private System.Windows.Forms.Timer CreateFocusTimer()
+    {
+        var timer = new System.Windows.Forms.Timer { Interval = 500 };
+        timer.Tick += (_, _) =>
         {
-            message.Collapsed = !message.Collapsed;
-            // Rebuild after the click finishes, not while this button's own
-            // event handler is still on the stack (it is about to be disposed).
-            BeginInvoke(new Action(RenderConversation));
+            UpdateFocusTarget();
+            RaiseIfCovered();
+
+            if (_interactive && GetIdleMilliseconds() > IdleLockMilliseconds)
+            {
+                Program.Log("Idle timeout: locking overlay");
+                ToggleInteractive();
+            }
         };
+        timer.Start();
+        return timer;
+    }
 
-        card.Controls.Add(name);
-        card.Controls.Add(toggle);
+    /// <summary>
+    /// Re-asserts topmost only when another window is actually above us.
+    /// Calling SetWindowPos unconditionally on a timer is what made the
+    /// earlier build flicker.
+    /// </summary>
+    private void RaiseIfCovered()
+    {
+        if (!IsHandleCreated || IsDisposed) return;
 
-        if (body != null)
+        // GW_HWNDPREV is the window directly above ours in the z-order.
+        // NULL means nothing covers us, so there is nothing to fix.
+        if (GetWindow(Handle, GW_HWNDPREV) == IntPtr.Zero) return;
+
+        SetWindowPos(Handle, HWND_TOPMOST, 0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        Program.Log("Raised above covering window");
+    }
+
+    private void ToggleInteractive()
+    {
+        if (!IsHandleCreated || IsDisposed) return;
+
+        _interactive = !_interactive;
+
+        if (_interactive)
         {
-            card.Controls.Add(body);
+            // Enable global keyboard logger
+            _globalKeyboardLoggerEnabled = true;
+            Program.Log("Global keyboard logger enabled");
+        }
+        else
+        {
+            // Disable global keyboard logger
+            _globalKeyboardLoggerEnabled = false;
+            Program.Log("Global keyboard logger disabled");
         }
 
-        // Grabbing a bubble also moves the overlay.
-        EnableDrag(card);
-        return card;
+        var exStyle = GetWindowLong(Handle, GWL_EXSTYLE);
+        exStyle = _interactive
+            ? exStyle & ~(WS_EX_TRANSPARENT | WS_EX_NOACTIVATE)
+            : exStyle | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE;
+        SetWindowLong(Handle, GWL_EXSTYLE, exStyle);
+
+        SetWindowPos(Handle, IntPtr.Zero, 0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+
+        Program.Log($"Interactive={_interactive}");
+        UpdateInteractionVisuals();
+    }
+
+    private static long GetIdleMilliseconds()
+    {
+        var info = new LASTINPUTINFO { cbSize = (uint)Marshal.SizeOf<LASTINPUTINFO>() };
+        if (!GetLastInputInfo(ref info)) return 0;
+
+        return unchecked((uint)Environment.TickCount - info.dwTime);
+    }
+
+    private void UpdateFocusTarget()
+    {
+        var foreground = GetForegroundWindow();
+        if (foreground == IntPtr.Zero || foreground == Handle) return;
+
+        var title = new StringBuilder(512);
+        if (GetWindowText(foreground, title, title.Capacity) <= 0) return;
+
+        _lastForegroundWindow = foreground;
+        _lastForegroundTitle = title.ToString();
+        _status.Text = _lastForegroundTitle;
+    }
+
+    private void UpdateInteractionVisuals()
+    {
+        if (_interactiveButton is null) return;
+
+        _interactiveButton.Text = _interactive ? "Lock" : "Interact";
+        _interactiveButton.BackColor = _interactive
+            ? Theme.ButtonBackgroundActive
+            : Theme.ButtonBackground;
+        _status.ForeColor = _interactive ? Theme.TextOnAccent : Theme.TextSecondary;
+
+        if (_titleLabel != null)
+        {
+            _titleLabel.Text = _interactive
+                ? "Typing mode  ·  keys go to this window  ·  Esc to lock"
+                : "Focus chat  ·  Ctrl+Shift+O to type";
+        }
+    }
+
+    private void EnableDrag(Control control)
+    {
+        control.MouseDown += BeginDrag;
+
+        foreach (Control child in control.Controls)
+        {
+            // Buttons (window controls) and the button strip keep their clicks.
+            if (child is Button or FlowLayoutPanel) continue;
+            EnableDrag(child);
+        }
+    }
+
+    private void BeginDrag(object sender, MouseEventArgs e)
+    {
+        if (!_interactive || e.Button != MouseButtons.Left) return;
+
+        // Hand the drag to Windows itself. Tracking MouseMove by hand dropped
+        // moves once capture moved from the clicked label to the form, which is
+        // why dragging felt broken after the UI rewrite.
+        ReleaseCapture();
+        // Qualified because this class has its own SendMessage() for chat input.
+        NativeMethods.SendMessage(Handle, WM_NCLBUTTONDOWN, (IntPtr)HTCAPTION, IntPtr.Zero);
+    }
+
+    private void ToggleCompact()
+    {
+        if (!_compact)
+        {
+            _restoredSize = Size;
+            _content.Visible = false;
+            Height = _header.Height;
+            _compact = true;
+            _maximized = false;
+        }
+        else
+        {
+            _content.Visible = true;
+            Size = _restoredSize;
+            _compact = false;
+        }
+    }
+
+    private void ToggleMaximize()
+    {
+        if (_compact)
+        {
+            _content.Visible = true;
+            Size = _restoredSize;
+            _compact = false;
+        }
+
+        if (_maximized)
+        {
+            Size = _restoredSize;
+            _maximized = false;
+        }
+        else
+        {
+            _restoredSize = Size;
+            Bounds = Screen.FromControl(this).WorkingArea;
+            _maximized = true;
+        }
+    }
+
+    private static void OpenLog()
+    {
+        try
+        {
+            Process.Start("notepad.exe", Program.LogPath);
+        }
+        catch (Exception ex)
+        {
+            Program.Log("Open log failed: " + ex.Message);
+        }
+    }
+
+    protected override void WndProc(ref Message m)
+    {
+        if (m.Msg == WM_HOTKEY && m.WParam.ToInt32() == HotkeyId)
+        {
+            ToggleInteractive();
+            return;
+        }
+
+        base.WndProc(ref m);
+    }
+
+    protected override void OnFormClosed(FormClosedEventArgs e)
+    {
+        Program.Log("FORM closed");
+
+        try { UnregisterHotKey(Handle, HotkeyId); } catch { }
+
+        _timer?.Stop();
+
+        if (_tray != null)
+        {
+            _tray.Visible = false;
+            _tray.ContextMenuStrip?.Dispose();
+            _tray.Dispose();
+        }
+
+        base.OnFormClosed(e);
     }
 }
