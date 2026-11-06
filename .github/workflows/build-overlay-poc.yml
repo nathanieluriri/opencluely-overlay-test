@@ -30,11 +30,14 @@ jobs:
           1. Extract this whole folder somewhere.
           2. If Windows blocks OverlayPoc.exe: right-click it -> Properties -> check Unblock -> OK.
           3. Run OverlayPoc.exe.
-          4. A green bar should appear at the top center of the primary screen.
-          5. Press Ctrl+Shift+O to toggle interactive mode (yellow bar).
-             In interactive mode you can click and drag the bar.
-             Press Ctrl+Shift+O again to return to click-through mode.
-          6. Exit via the tray icon -> Exit.
+          4. The chat overlay appears at the top center of the primary screen.
+          5. It is click-through by default, so clicks reach the app underneath.
+          6. Press Ctrl+Shift+O to unlock it ("Lock" button, purple status line).
+             - Drag the window by its header.
+             - Type in the composer: Enter sends, Shift+Enter adds a line.
+             - Press Ctrl+Shift+O again to return to click-through mode.
+          7. Header buttons: "-" collapses to the title bar, square maximizes,
+             "x" hides to the tray. Restore or exit from the tray icon.
 
           If nothing appears, open:
             %LOCALAPPDATA%\OverlayPoc\poc.log
