@@ -115,7 +115,7 @@ internal sealed class OverlayForm : Form
         StartPosition = FormStartPosition.Manual;
         ShowInTaskbar = false;
         TopMost = true;
-        BackColor = Color.FromArgb(235, 15, 15, 18);
+        BackColor = Color.FromArgb(15, 15, 18);
         Opacity = 0.92;
 
         var screen = Screen.PrimaryScreen?.Bounds ?? new Rectangle(0, 0, 1280, 720);
