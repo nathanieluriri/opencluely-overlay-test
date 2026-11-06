@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Drawing;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows.Forms;
 using OverlayPoc.Chat;
@@ -15,6 +16,7 @@ namespace OverlayPoc;
 internal sealed partial class OverlayForm : Form
 {
     private const int HotkeyId = 1;
+    private const int IdleLockMilliseconds = 20000;
 
     private readonly Label _status;
     private readonly System.Windows.Forms.Timer _timer;
@@ -148,6 +150,12 @@ internal sealed partial class OverlayForm : Form
         {
             UpdateFocusTarget();
             RaiseIfCovered();
+
+            if (_interactive && GetIdleMilliseconds() > IdleLockMilliseconds)
+            {
+                Program.Log("Idle timeout: locking overlay");
+                ToggleInteractive();
+            }
         };
         timer.Start();
         return timer;
@@ -207,6 +215,14 @@ internal sealed partial class OverlayForm : Form
             }
             RaiseIfCovered();
         }
+    }
+
+    private static long GetIdleMilliseconds()
+    {
+        var info = new LASTINPUTINFO { cbSize = (uint)Marshal.SizeOf<LASTINPUTINFO>() };
+        if (!GetLastInputInfo(ref info)) return 0;
+
+        return unchecked((uint)Environment.TickCount - info.dwTime);
     }
 
     private void UpdateFocusTarget()

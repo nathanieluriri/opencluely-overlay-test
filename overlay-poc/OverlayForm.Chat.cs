@@ -59,7 +59,10 @@ internal sealed partial class OverlayForm
 
         _input.Clear();
         RenderConversation();
-        _input.Focus();
+
+        // Sending ends typing mode: the overlay goes back to click-through and
+        // focus returns to whatever the user was doing.
+        if (_interactive) ToggleInteractive();
     }
 
     private void OnComposerKeyDown(object sender, KeyEventArgs e)
