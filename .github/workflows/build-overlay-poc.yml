@@ -31,7 +31,10 @@ jobs:
           2. If Windows blocks OverlayPoc.exe: right-click it -> Properties -> check Unblock -> OK.
           3. Run OverlayPoc.exe.
           4. A green bar should appear at the top center of the primary screen.
-          5. Exit via the tray icon -> Exit.
+          5. Press Ctrl+Shift+O to toggle interactive mode (yellow bar).
+             In interactive mode you can click and drag the bar.
+             Press Ctrl+Shift+O again to return to click-through mode.
+          6. Exit via the tray icon -> Exit.
 
           If nothing appears, open:
             %LOCALAPPDATA%\OverlayPoc\poc.log
