@@ -26,7 +26,7 @@ internal sealed partial class OverlayForm
         _header.BackColor = Theme.SurfaceRaised;
         _header.Padding = new Padding(18, 0, 12, 0);
 
-        var title = new Label
+        _titleLabel = new Label
         {
             AutoSize = true,
             Text = "Focus chat  ·  Ctrl+Shift+O to type",
@@ -48,7 +48,7 @@ internal sealed partial class OverlayForm
         _status.MaximumSize = new Size(340, 0);
         _status.AutoEllipsis = true;
 
-        _header.Controls.Add(title);
+        _header.Controls.Add(_titleLabel);
         _header.Controls.Add(focusCaption);
         _header.Controls.Add(_status);
 
@@ -92,6 +92,9 @@ internal sealed partial class OverlayForm
         };
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 190));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        // Without an explicit row style the single row sizes to the children's
+        // preferred height, which collapsed the whole chat area.
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
         layout.Controls.Add(BuildSidebar(), 0, 0);
         layout.Controls.Add(BuildChatPanel(), 1, 0);

@@ -64,6 +64,13 @@ internal sealed partial class OverlayForm
 
     private void OnComposerKeyDown(object sender, KeyEventArgs e)
     {
+        if (e.KeyCode == Keys.Escape)
+        {
+            e.SuppressKeyPress = true;
+            if (_interactive) ToggleInteractive();
+            return;
+        }
+
         if (e.KeyCode == Keys.Enter && !e.Shift)
         {
             e.SuppressKeyPress = true;
@@ -137,16 +144,28 @@ internal sealed partial class OverlayForm
     /// </summary>
     private Control CreateMessageCard(ChatMessage message)
     {
-        var cardWidth = Math.Max(240, _messages.ClientSize.Width - 34);
+        var cardWidth = Math.Max(240, _messages.ClientSize.Width - 30);
         var textWidth = Math.Max(180, cardWidth - CardPadding * 2);
 
-        var bodyHeight = message.Collapsed
-            ? 0
-            : TextRenderer.MeasureText(
-                message.Text,
-                Theme.Body,
-                new Size(textWidth, 10000),
-                TextFormatFlags.WordBreak).Height + 4;
+        Label body = null;
+        var bodyHeight = 0;
+
+        if (!message.Collapsed)
+        {
+            body = new Label
+            {
+                AutoSize = true,
+                MaximumSize = new Size(textWidth, 0),
+                Text = message.Text,
+                ForeColor = Theme.TextPrimary,
+                Font = Theme.Body,
+                Location = new Point(CardPadding, CardPadding + CardHeaderHeight)
+            };
+
+            // Let the label itself decide how tall the wrapped text is; using a
+            // separate TextRenderer measurement clipped long messages.
+            bodyHeight = body.PreferredSize.Height + 6;
+        }
 
         var card = new Panel
         {
@@ -192,21 +211,13 @@ internal sealed partial class OverlayForm
         card.Controls.Add(name);
         card.Controls.Add(toggle);
 
-        if (!message.Collapsed)
+        if (body != null)
         {
-            var body = new Label
-            {
-                AutoSize = false,
-                Text = message.Text,
-                ForeColor = Theme.TextPrimary,
-                Font = Theme.Body,
-                Location = new Point(CardPadding, CardPadding + CardHeaderHeight),
-                Size = new Size(textWidth, bodyHeight),
-                TextAlign = ContentAlignment.TopLeft
-            };
             card.Controls.Add(body);
         }
 
+        // Grabbing a bubble also moves the overlay.
+        EnableDrag(card);
         return card;
     }
 }

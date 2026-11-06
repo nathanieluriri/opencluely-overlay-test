@@ -27,6 +27,7 @@ internal sealed partial class OverlayForm : Form
     private readonly List<ChatConversation> _conversations = new();
 
     private Button _interactiveButton;
+    private Label _titleLabel;
     private ChatConversation _currentConversation;
     private IntPtr _lastForegroundWindow;
     private string _lastForegroundTitle = "Waiting for active app";
@@ -67,6 +68,7 @@ internal sealed partial class OverlayForm : Form
 
         BuildInterface();
         EnableDrag(_header);
+        EnableDrag(_messages);
 
         _tray = CreateTrayIcon();
         _timer = CreateFocusTimer();
@@ -229,6 +231,13 @@ internal sealed partial class OverlayForm : Form
             ? Theme.ButtonBackgroundActive
             : Theme.ButtonBackground;
         _status.ForeColor = _interactive ? Theme.TextOnAccent : Theme.TextSecondary;
+
+        if (_titleLabel != null)
+        {
+            _titleLabel.Text = _interactive
+                ? "Typing mode  ·  keys go to this window  ·  Esc to lock"
+                : "Focus chat  ·  Ctrl+Shift+O to type";
+        }
     }
 
     private void EnableDrag(Control control)
