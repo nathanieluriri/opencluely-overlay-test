@@ -12,6 +12,8 @@ class WindowManager {
     this.currentDisplay = null;
     this.screenWatcher = null;
     this.desktopWatcher = null;
+    this.windowsZOrderKeeper = null;
+    this.windowsZOrderKeeperIntervalMs = 1000;
     this.lastActiveSpace = null;
     this.screenCaptureAvailabilityWatcher = null;
     this.isScreenBeingShared = false;
@@ -121,6 +123,7 @@ class WindowManager {
       this.setupWindowEventHandlers();
       this.setupScreenTracking();
       this.setupScreenCaptureAvailabilityWatcher();
+      this.startWindowsZOrderKeeper();
 
       // Make windows interactive by default so they are not click-through
       this.setInteractive(true);
@@ -591,21 +594,22 @@ class WindowManager {
         window.setAlwaysOnTop(true);
       }
     } else if (process.platform === 'win32') {
-      // Windows: Multiple enforcement attempts
-      window.setAlwaysOnTop(true);
-      
-      setTimeout(() => {
-        if (!window.isDestroyed()) {
-          window.setAlwaysOnTop(true);
+      // Windows: Multiple enforcement attempts.
+      // setAlwaysOnTop only marks the window HWND_TOPMOST. A fullscreen app
+      // can still sit above us in the topmost band, so moveTop() is also
+      // needed to put the window at the very top of the z-order.
+      const raiseOnWindows = () => {
+        if (window.isDestroyed()) return;
+        window.setAlwaysOnTop(true);
+        if (typeof window.moveTop === 'function') {
+          window.moveTop();
         }
-      }, 100);
-      
-      setTimeout(() => {
-        if (!window.isDestroyed()) {
-          window.setAlwaysOnTop(true);
-        }
-      }, 500);
-      
+      };
+
+      raiseOnWindows();
+      setTimeout(raiseOnWindows, 100);
+      setTimeout(raiseOnWindows, 500);
+
     } else {
       // Linux and other platforms
       window.setAlwaysOnTop(true);
@@ -648,6 +652,11 @@ class WindowManager {
             }, 50);
           } else {
             window.setAlwaysOnTop(true);
+            // On Windows, re-insert at the top of the topmost band so a
+            // borderless/fullscreen app that raised itself goes behind us.
+            if (process.platform === 'win32' && typeof window.moveTop === 'function') {
+              window.moveTop();
+            }
           }
         } catch (error) {
           logger.debug('Error in enforceAlwaysOnTop', { error: error.message });
@@ -691,6 +700,52 @@ class WindowManager {
       visibleOnAllWorkspaces: true,
       skipTaskbar: true
     });
+  }
+
+  /**
+   * Windows-only z-order keeper.
+   *
+   * `alwaysOnTop` maps to HWND_TOPMOST on Windows, which keeps us above
+   * *normal* windows but not necessarily above a borderless/fullscreen window
+   * that has raised itself into the topmost band (Chrome/Edge fullscreen,
+   * many apps' F11 mode). Those transitions emit no event we can listen for,
+   * so re-assert the z-order on a short timer while windows are visible.
+   *
+   * This cannot beat exclusive-fullscreen DirectX apps: they bypass DWM
+   * composition entirely. Run those in borderless/windowed fullscreen.
+   */
+  startWindowsZOrderKeeper() {
+    if (process.platform !== 'win32' || this.windowsZOrderKeeper) return;
+
+    const raiseVisibleWindows = () => {
+      this.windows.forEach((window, type) => {
+        if (!window || window.isDestroyed() || !window.isVisible()) return;
+        try {
+          // setAlwaysOnTop re-asserts HWND_TOPMOST (it may be a no-op if
+          // Windows still considers the window topmost). moveTop then puts it
+          // at the very top of the z-order without activating or focusing it.
+          window.setAlwaysOnTop(true);
+          if (typeof window.moveTop === 'function') {
+            window.moveTop();
+          }
+        } catch (error) {
+          logger.debug('Windows z-order re-raise failed', { type, error: error.message });
+        }
+      });
+    };
+
+    raiseVisibleWindows();
+    this.windowsZOrderKeeper = setInterval(raiseVisibleWindows, this.windowsZOrderKeeperIntervalMs);
+    logger.info('Windows fullscreen z-order keeper started', {
+      intervalMs: this.windowsZOrderKeeperIntervalMs
+    });
+  }
+
+  stopWindowsZOrderKeeper() {
+    if (!this.windowsZOrderKeeper) return;
+    clearInterval(this.windowsZOrderKeeper);
+    this.windowsZOrderKeeper = null;
+    logger.info('Windows fullscreen z-order keeper stopped');
   }
 
   positionWindow(window, type) {
@@ -868,12 +923,18 @@ class WindowManager {
       win.setAlwaysOnTop(true);
       win.show();
       win.focus();
+      if (process.platform === 'win32' && typeof win.moveTop === 'function') {
+        win.moveTop();
+      }
       setTimeout(() => {
         if (win.isDestroyed()) return;
         if (!isLLM) {
           win.setVisibleOnAllWorkspaces(false);
         }
         win.setAlwaysOnTop(true);
+        if (process.platform === 'win32' && typeof win.moveTop === 'function') {
+          win.moveTop();
+        }
       }, 500);
     }
 
@@ -1526,8 +1587,10 @@ class WindowManager {
     });
     
     this.windows.clear();
-    
+
     // Clean up all watchers
+    this.stopWindowsZOrderKeeper();
+
     if (this.screenWatcher) {
       clearInterval(this.screenWatcher);
       this.screenWatcher = null;
