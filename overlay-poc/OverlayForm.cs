@@ -9,14 +9,13 @@ using static OverlayPoc.NativeMethods;
 namespace OverlayPoc;
 
 /// <summary>
-/// Always-on-top overlay window. It is click-through and non-activating by
-/// default; Ctrl+Shift+O (or the tray menu) unlocks it for typing and dragging.
-/// UI construction lives in OverlayForm.Ui.cs, chat logic in OverlayForm.Chat.cs.
+/// Always-on-top overlay window. It is click-through and non-activating at
+/// all times. Ctrl+Shift+O toggles global keyboard capture — keystrokes flow
+/// into the chat input without the overlay ever stealing focus.
 /// </summary>
 internal sealed partial class OverlayForm : Form
 {
     private const int HotkeyId = 1;
-    private const int IdleLockMilliseconds = 20000;
 
     private readonly Label _status;
     private readonly System.Windows.Forms.Timer _timer;
@@ -29,20 +28,27 @@ internal sealed partial class OverlayForm : Form
     private readonly List<ChatConversation> _conversations = new();
 
     private Button _interactiveButton;
-    private Label _titleLabel;
     private ChatConversation _currentConversation;
+    private Label _titleLabel;
     private IntPtr _lastForegroundWindow;
     private string _lastForegroundTitle = "Waiting for active app";
     private Size _restoredSize = new(760, 620);
     private bool _captureHidden;
-    private bool _interactive;
     private bool _compact;
     private bool _maximized;
     private bool _suppressHistorySelection;
 
+    // ── Keyboard capture (no focus change, ever) ───────────────────────
+
+    private bool _keyboardCaptureEnabled;
+    private IntPtr _hookId = IntPtr.Zero;
+    private readonly LowLevelKeyboardProc _hookProc;
+
     public OverlayForm()
     {
         Program.Log("FORM ctor");
+
+        _hookProc = KeyboardProc;
 
         FormBorderStyle = FormBorderStyle.None;
         StartPosition = FormStartPosition.Manual;
@@ -77,6 +83,8 @@ internal sealed partial class OverlayForm : Form
 
         Program.Log("FORM ctor done");
     }
+
+    // ── Window lifecycle ──────────────────────────────────────────────
 
     protected override void OnHandleCreated(EventArgs e)
     {
@@ -117,9 +125,32 @@ internal sealed partial class OverlayForm : Form
         base.OnShown(e);
         Program.Log("FORM shown");
         _tray.ShowBalloonTip(3000, "Focus chat",
-            "Ctrl+Shift+O unlocks the overlay for typing and dragging.", ToolTipIcon.Info);
+            "Ctrl+Shift+O captures typing into the chat without changing focus.",
+            ToolTipIcon.Info);
         UpdateFocusTarget();
     }
+
+    protected override void OnFormClosed(FormClosedEventArgs e)
+    {
+        Program.Log("FORM closed");
+
+        ReleaseHook();
+
+        try { UnregisterHotKey(Handle, HotkeyId); } catch { }
+
+        _timer?.Stop();
+
+        if (_tray != null)
+        {
+            _tray.Visible = false;
+            _tray.ContextMenuStrip?.Dispose();
+            _tray.Dispose();
+        }
+
+        base.OnFormClosed(e);
+    }
+
+    // ── Tray icon ─────────────────────────────────────────────────────
 
     private NotifyIcon CreateTrayIcon()
     {
@@ -130,7 +161,7 @@ internal sealed partial class OverlayForm : Form
             RaiseIfCovered();
         });
         menu.Items.Add("Raise now", null, (_, _) => RaiseIfCovered());
-        menu.Items.Add("Toggle interactive (Ctrl+Shift+O)", null, (_, _) => ToggleInteractive());
+        menu.Items.Add("Toggle keyboard capture (Ctrl+Shift+O)", null, (_, _) => ToggleInteractive());
         menu.Items.Add("Open log", null, (_, _) => OpenLog());
         menu.Items.Add("Exit", null, (_, _) => Close());
 
@@ -143,6 +174,8 @@ internal sealed partial class OverlayForm : Form
         };
     }
 
+    // ── Focus timer ───────────────────────────────────────────────────
+
     private System.Windows.Forms.Timer CreateFocusTimer()
     {
         var timer = new System.Windows.Forms.Timer { Interval = 500 };
@@ -150,79 +183,192 @@ internal sealed partial class OverlayForm : Form
         {
             UpdateFocusTarget();
             RaiseIfCovered();
-
-            if (_interactive && GetIdleMilliseconds() > IdleLockMilliseconds)
-            {
-                Program.Log("Idle timeout: locking overlay");
-                ToggleInteractive();
-            }
         };
         timer.Start();
         return timer;
     }
 
-    /// <summary>
-    /// Re-asserts topmost only when another window is actually above us.
-    /// Calling SetWindowPos unconditionally on a timer is what made the
-    /// earlier build flicker.
-    /// </summary>
-    private void RaiseIfCovered()
+    // ── Global keyboard hook ──────────────────────────────────────────
+
+    private void SetHook()
     {
-        if (!IsHandleCreated || IsDisposed) return;
+        if (_hookId != IntPtr.Zero) return;
 
-        // GW_HWNDPREV is the window directly above ours in the z-order.
-        // NULL means nothing covers us, so there is nothing to fix.
-        if (GetWindow(Handle, GW_HWNDPREV) == IntPtr.Zero) return;
+        _hookId = SetWindowsHookEx(WH_KEYBOARD_LL, _hookProc,
+            IntPtr.Zero, 0);
 
-        SetWindowPos(Handle, HWND_TOPMOST, 0, 0, 0, 0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-        Program.Log("Raised above covering window");
+        if (_hookId == IntPtr.Zero)
+        {
+            var err = Marshal.GetLastWin32Error();
+            Program.Log($"HOOK set failed: error {err}");
+        }
+        else
+        {
+            Program.Log("HOOK installed");
+        }
     }
+
+    private void ReleaseHook()
+    {
+        if (_hookId == IntPtr.Zero) return;
+
+        UnhookWindowsHookEx(_hookId);
+        _hookId = IntPtr.Zero;
+        Program.Log("HOOK released");
+    }
+
+    private IntPtr KeyboardProc(int nCode, IntPtr wParam, IntPtr lParam)
+    {
+        if (nCode < 0 || !_keyboardCaptureEnabled)
+            return CallNextHookEx(_hookId, nCode, wParam, lParam);
+
+        var kb = Marshal.PtrToStructure<KBDLLHOOKSTRUCT>(lParam);
+
+        // Never suppress modifier keys — they must reach the system so
+        // combos (including our own Ctrl+Shift+O) continue to work.
+        if (kb.vkCode is VK_SHIFT or VK_LSHIFT or VK_RSHIFT
+            or VK_CONTROL or VK_LCONTROL or VK_RCONTROL
+            or VK_MENU or VK_LMENU or VK_RMENU
+            or VK_LWIN or VK_RWIN
+            or VK_CAPITAL or VK_NUMLOCK or VK_SCROLL)
+        {
+            return CallNextHookEx(_hookId, nCode, wParam, lParam);
+        }
+
+        // Detect Ctrl+Shift+O in the hook so it works even while capturing.
+        if (kb.vkCode == VK_O)
+        {
+            var ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+            var shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+            if (ctrl && shift && (wParam == (IntPtr)WM_KEYDOWN || wParam == (IntPtr)WM_SYSKEYDOWN))
+            {
+                // Let the hotkey through so the RegisterHotKey path also fires.
+                return CallNextHookEx(_hookId, nCode, wParam, lParam);
+            }
+        }
+
+        if (wParam == (IntPtr)WM_KEYDOWN || wParam == (IntPtr)WM_SYSKEYDOWN)
+        {
+            switch (kb.vkCode)
+            {
+                case VK_RETURN:
+                    BeginInvoke(new Action(() => SendMessage()));
+                    return (IntPtr)1;
+
+                case VK_BACK:
+                    BeginInvoke(new Action(() => HandleBackspace()));
+                    return (IntPtr)1;
+
+                case VK_ESCAPE:
+                    BeginInvoke(new Action(() => ToggleInteractive()));
+                    return (IntPtr)1;
+
+                case VK_TAB:
+                    BeginInvoke(new Action(() => AppendToInput("\t")));
+                    return (IntPtr)1;
+
+                default:
+                {
+                    var text = VkToText(kb.vkCode, kb.scanCode, kb.flags);
+                    if (text.Length > 0)
+                    {
+                        BeginInvoke(new Action(() => AppendToInput(text)));
+                    }
+
+                    // Suppress all character-producing keys (and navigation
+                    // keys that we don't explicitly handle) so the target
+                    // app never sees them.
+                    return (IntPtr)1;
+                }
+            }
+        }
+
+        return CallNextHookEx(_hookId, nCode, wParam, lParam);
+    }
+
+    /// <summary>
+    /// Translate a virtual-key / scan-code pair into a string using the
+    /// current keyboard layout. Returns an empty string for non-printable keys.
+    /// </summary>
+    private static string VkToText(uint vkCode, uint scanCode, uint flags)
+    {
+        // Build a keyboard-state snapshot.
+        var keyState = new byte[256];
+        GetKeyboardState(keyState);
+
+        // ToUnicode may alter the keyboard state for dead keys; work on a copy.
+        var buf = new StringBuilder(8);
+        var result = ToUnicode(vkCode, scanCode, keyState, buf, buf.Capacity, 0);
+
+        if (result > 0)
+            return buf.ToString(0, result);
+
+        // Dead key — the character is pending, not produced yet.
+        if (result < 0)
+            return "";
+
+        // No translation available; handle a few explicit cases.
+        return vkCode switch
+        {
+            VK_SPACE => " ",
+            _ => ""
+        };
+    }
+
+    private void AppendToInput(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return;
+
+        _input.Text += text;
+        _input.SelectionStart = _input.Text.Length;
+        _input.ScrollToCaret();
+    }
+
+    private void HandleBackspace()
+    {
+        if (_input.Text.Length > 0)
+        {
+            _input.Text = _input.Text[..^1];
+            _input.SelectionStart = _input.Text.Length;
+            _input.ScrollToCaret();
+        }
+    }
+
+    // ── Toggle keyboard capture ───────────────────────────────────────
 
     private void ToggleInteractive()
     {
         if (!IsHandleCreated || IsDisposed) return;
 
-        _interactive = !_interactive;
+        _keyboardCaptureEnabled = !_keyboardCaptureEnabled;
 
-        var exStyle = GetWindowLong(Handle, GWL_EXSTYLE);
-        exStyle = _interactive
-            ? exStyle & ~(WS_EX_TRANSPARENT | WS_EX_NOACTIVATE)
-            : exStyle | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE;
-        SetWindowLong(Handle, GWL_EXSTYLE, exStyle);
-
-        SetWindowPos(Handle, IntPtr.Zero, 0, 0, 0, 0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
-
-        Program.Log($"Interactive={_interactive}");
-        UpdateInteractionVisuals();
-
-        if (_interactive)
+        if (_keyboardCaptureEnabled)
         {
-            // Unlocking is meant to take the user straight to typing. Focus has
-            // to be applied after the activation message is processed.
-            Activate();
-            BeginInvoke(new Action(() =>
-            {
-                if (!_compact) _input.Focus();
-            }));
+            SetHook();
+            Program.Log("Keyboard capture ENABLED");
         }
         else
         {
-            if (_lastForegroundWindow != IntPtr.Zero)
-            {
-                SetForegroundWindow(_lastForegroundWindow);
-            }
-            RaiseIfCovered();
+            ReleaseHook();
+            Program.Log("Keyboard capture DISABLED");
         }
+
+        // The window NEVER changes style — it stays transparent and
+        // click-through regardless of capture state.
+        UpdateInteractionVisuals();
     }
 
-    private static long GetIdleMilliseconds()
-    {
-        var info = new LASTINPUTINFO { cbSize = (uint)Marshal.SizeOf<LASTINPUTINFO>() };
-        if (!GetLastInputInfo(ref info)) return 0;
+    // ── Window management ─────────────────────────────────────────────
 
-        return unchecked((uint)Environment.TickCount - info.dwTime);
+    private void RaiseIfCovered()
+    {
+        if (!IsHandleCreated || IsDisposed) return;
+
+        if (GetWindow(Handle, GW_HWNDPREV) == IntPtr.Zero) return;
+
+        SetWindowPos(Handle, HWND_TOPMOST, 0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        Program.Log("Raised above covering window");
     }
 
     private void UpdateFocusTarget()
@@ -242,19 +388,21 @@ internal sealed partial class OverlayForm : Form
     {
         if (_interactiveButton is null) return;
 
-        _interactiveButton.Text = _interactive ? "Lock" : "Interact";
-        _interactiveButton.BackColor = _interactive
+        _interactiveButton.Text = _keyboardCaptureEnabled ? "Capturing" : "Capture";
+        _interactiveButton.BackColor = _keyboardCaptureEnabled
             ? Theme.ButtonBackgroundActive
             : Theme.ButtonBackground;
-        _status.ForeColor = _interactive ? Theme.TextOnAccent : Theme.TextSecondary;
+        _status.ForeColor = _keyboardCaptureEnabled ? Theme.TextOnAccent : Theme.TextSecondary;
 
         if (_titleLabel != null)
         {
-            _titleLabel.Text = _interactive
-                ? "Typing mode  ·  keys go to this window  ·  Esc to lock"
-                : "Focus chat  ·  Ctrl+Shift+O to type";
+            _titleLabel.Text = _keyboardCaptureEnabled
+                ? "Capturing  ·  typing goes to chat  ·  Ctrl+Shift+O or Esc to stop"
+                : "Focus chat  ·  Ctrl+Shift+O to capture typing";
         }
     }
+
+    // ── Drag support ──────────────────────────────────────────────────
 
     private void EnableDrag(Control control)
     {
@@ -262,7 +410,6 @@ internal sealed partial class OverlayForm : Form
 
         foreach (Control child in control.Controls)
         {
-            // Buttons (window controls) and the button strip keep their clicks.
             if (child is Button or FlowLayoutPanel) continue;
             EnableDrag(child);
         }
@@ -270,15 +417,13 @@ internal sealed partial class OverlayForm : Form
 
     private void BeginDrag(object sender, MouseEventArgs e)
     {
-        if (!_interactive || e.Button != MouseButtons.Left) return;
+        if (e.Button != MouseButtons.Left) return;
 
-        // Hand the drag to Windows itself. Tracking MouseMove by hand dropped
-        // moves once capture moved from the clicked label to the form, which is
-        // why dragging felt broken after the UI rewrite.
         ReleaseCapture();
-        // Qualified because this class has its own SendMessage() for chat input.
         NativeMethods.SendMessage(Handle, WM_NCLBUTTONDOWN, (IntPtr)HTCAPTION, IntPtr.Zero);
     }
+
+    // ── Window sizing ─────────────────────────────────────────────────
 
     private void ToggleCompact()
     {
@@ -332,6 +477,8 @@ internal sealed partial class OverlayForm : Form
         }
     }
 
+    // ── WndProc (global hotkey) ───────────────────────────────────────
+
     protected override void WndProc(ref Message m)
     {
         if (m.Msg == WM_HOTKEY && m.WParam.ToInt32() == HotkeyId)
@@ -341,23 +488,5 @@ internal sealed partial class OverlayForm : Form
         }
 
         base.WndProc(ref m);
-    }
-
-    protected override void OnFormClosed(FormClosedEventArgs e)
-    {
-        Program.Log("FORM closed");
-
-        try { UnregisterHotKey(Handle, HotkeyId); } catch { }
-
-        _timer?.Stop();
-
-        if (_tray != null)
-        {
-            _tray.Visible = false;
-            _tray.ContextMenuStrip?.Dispose();
-            _tray.Dispose();
-        }
-
-        base.OnFormClosed(e);
     }
 }
