@@ -129,7 +129,7 @@ internal sealed partial class OverlayForm : Form
         base.OnShown(e);
         Program.Log("FORM shown");
         _tray.ShowBalloonTip(3000, "Focus chat",
-            "Ctrl+Shift+O captures typing  ·  Ctrl+Shift+I toggles HUD  ·  Ctrl+Shift+V asks selection",
+            "Ctrl+Shift+O captures typing  ·  Ctrl+Shift+I toggles HUD  ·  Ctrl+Shift+X asks selection",
             ToolTipIcon.Info);
         UpdateFocusTarget();
     }
@@ -259,8 +259,8 @@ internal sealed partial class OverlayForm : Form
             }
         }
 
-        // ── Ctrl+Shift+V copies selection & asks ───────────────────
-        if (kb.vkCode == VK_V
+        // ── Ctrl+Shift+X copies selection & asks ───────────────────
+        if (kb.vkCode == VK_X
             && (wParam == (IntPtr)WM_KEYDOWN || wParam == (IntPtr)WM_SYSKEYDOWN))
         {
             var ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
@@ -424,7 +424,7 @@ internal sealed partial class OverlayForm : Form
         {
             _titleLabel.Text = _keyboardCaptureEnabled
                 ? "Capturing  ·  typing goes to chat  ·  Ctrl+Shift+O or Esc to stop"
-                : "Focus chat  ·  Ctrl+Shift+O type  ·  Ctrl+Shift+I HUD  ·  Ctrl+Shift+V ask selection";
+                : "Focus chat  ·  Ctrl+Shift+O type  ·  Ctrl+Shift+I HUD  ·  Ctrl+Shift+X ask selection";
         }
     }
 
