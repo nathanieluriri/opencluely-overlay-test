@@ -37,6 +37,8 @@ internal static class NativeMethods
     internal const int WM_KEYDOWN = 0x0100;
     internal const int WM_SYSKEYDOWN = 0x0104;
 
+    internal const uint KEYEVENTF_KEYUP = 0x0002;
+
     internal const int VK_BACK = 0x08;
     internal const int VK_TAB = 0x09;
     internal const int VK_RETURN = 0x0D;
@@ -47,6 +49,9 @@ internal static class NativeMethods
     internal const int VK_CAPITAL = 0x14;
     internal const int VK_O = 0x4F;
     internal const int VK_ESCAPE = 0x1B;
+    internal const int VK_I = 0x49;
+    internal const int VK_V = 0x56;
+    internal const int VK_C = 0x43;
     internal const int VK_SPACE = 0x20;
     internal const int VK_PRIOR = 0x21;
     internal const int VK_NEXT = 0x22;
@@ -142,4 +147,20 @@ internal static class NativeMethods
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     internal static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    internal static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, IntPtr dwExtraInfo);
+
+    internal const uint KEYEVENTF_EXTENDEDKEY = 0x0001;
+
+    [DllImport("user32.dll")]
+    internal static extern bool OpenClipboard(IntPtr hWndNewOwner);
+
+    [DllImport("user32.dll")]
+    internal static extern bool CloseClipboard();
+
+    [DllImport("user32.dll")]
+    internal static extern IntPtr GetClipboardData(uint uFormat);
+
+    internal const uint CF_UNICODETEXT = 13;
 }

@@ -24,6 +24,8 @@ internal sealed partial class OverlayForm : Form
     private readonly TextBox _input = new();
     private readonly ListBox _history = new();
     private readonly List<ChatConversation> _conversations = new();
+    private readonly LlmConfig _config;
+    private readonly HudForm _hud;
 
     private Button _interactiveButton;
     private ChatConversation _currentConversation;
@@ -35,6 +37,7 @@ internal sealed partial class OverlayForm : Form
     private bool _compact;
     private bool _maximized;
     private bool _suppressHistorySelection;
+    private CancellationTokenSource _thinkingCts;
 
     // ── Keyboard capture (no focus change, ever) ───────────────────────
 
@@ -47,6 +50,10 @@ internal sealed partial class OverlayForm : Form
         Program.Log("FORM ctor");
 
         _hookProc = KeyboardProc;
+        _config = LlmConfigLoader.Load();
+        Program.Log($"Config loaded. model={_config.Model} hasKey={_config.HasApiKey}");
+
+        _hud = new HudForm();
 
         FormBorderStyle = FormBorderStyle.None;
         StartPosition = FormStartPosition.Manual;
@@ -122,7 +129,7 @@ internal sealed partial class OverlayForm : Form
         base.OnShown(e);
         Program.Log("FORM shown");
         _tray.ShowBalloonTip(3000, "Focus chat",
-            "Ctrl+Shift+O captures typing into the chat without changing focus.",
+            "Ctrl+Shift+O captures typing  ·  Ctrl+Shift+I toggles HUD  ·  Ctrl+Shift+V asks selection",
             ToolTipIcon.Info);
         UpdateFocusTarget();
     }
@@ -142,6 +149,12 @@ internal sealed partial class OverlayForm : Form
             _tray.Dispose();
         }
 
+        if (_hud != null && !_hud.IsDisposed)
+        {
+            _hud.Close();
+            _hud.Dispose();
+        }
+
         base.OnFormClosed(e);
     }
 
@@ -157,6 +170,7 @@ internal sealed partial class OverlayForm : Form
         });
         menu.Items.Add("Raise now", null, (_, _) => RaiseIfCovered());
         menu.Items.Add("Toggle keyboard capture (Ctrl+Shift+O)", null, (_, _) => ToggleInteractive());
+        menu.Items.Add("Toggle HUD (Ctrl+Shift+I)", null, (_, _) => ToggleHud());
         menu.Items.Add("Open log", null, (_, _) => OpenLog());
         menu.Items.Add("Exit", null, (_, _) => Close());
 
@@ -228,6 +242,32 @@ internal sealed partial class OverlayForm : Form
             if (ctrl && shift)
             {
                 BeginInvoke(new Action(() => ToggleInteractive()));
+                return (IntPtr)1;
+            }
+        }
+
+        // ── Ctrl+Shift+I toggles HUD visibility ────────────────────
+        if (kb.vkCode == VK_I
+            && (wParam == (IntPtr)WM_KEYDOWN || wParam == (IntPtr)WM_SYSKEYDOWN))
+        {
+            var ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+            var shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+            if (ctrl && shift)
+            {
+                BeginInvoke(new Action(() => ToggleHud()));
+                return (IntPtr)1;
+            }
+        }
+
+        // ── Ctrl+Shift+V copies selection & asks ───────────────────
+        if (kb.vkCode == VK_V
+            && (wParam == (IntPtr)WM_KEYDOWN || wParam == (IntPtr)WM_SYSKEYDOWN))
+        {
+            var ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+            var shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+            if (ctrl && shift)
+            {
+                BeginInvoke(new Action(() => _ = AskSelectionAsync()));
                 return (IntPtr)1;
             }
         }
@@ -384,7 +424,7 @@ internal sealed partial class OverlayForm : Form
         {
             _titleLabel.Text = _keyboardCaptureEnabled
                 ? "Capturing  ·  typing goes to chat  ·  Ctrl+Shift+O or Esc to stop"
-                : "Focus chat  ·  Ctrl+Shift+O to capture typing";
+                : "Focus chat  ·  Ctrl+Shift+O type  ·  Ctrl+Shift+I HUD  ·  Ctrl+Shift+V ask selection";
         }
     }
 
@@ -462,4 +502,92 @@ internal sealed partial class OverlayForm : Form
             Program.Log("Open log failed: " + ex.Message);
         }
     }
+
+    // ── HUD toggle (Ctrl+Shift+I) ─────────────────────────────────────
+
+    private void ToggleHud()
+    {
+        if (_hud is null || _hud.IsDisposed) return;
+
+        if (_hud.Visible)
+        {
+            _hud.Hide();
+            Show();
+            RaiseIfCovered();
+            Program.Log("HUD hidden, overlay shown");
+        }
+        else
+        {
+            Hide();
+            _hud.Show();
+            Program.Log("HUD shown, overlay hidden");
+        }
+    }
+
+    // ── Ask selection (Ctrl+Shift+V) ───────────────────────────────────
+
+    private async Task AskSelectionAsync()
+    {
+        try
+        {
+            // Simulate Ctrl+C to copy the foreground app's selection.
+            keybd_event((byte)VK_CONTROL, 0, 0, IntPtr.Zero);
+            keybd_event((byte)VK_C, 0, 0, IntPtr.Zero);
+            keybd_event((byte)VK_C, 0, KEYEVENTF_KEYUP, IntPtr.Zero);
+            keybd_event((byte)VK_CONTROL, 0, KEYEVENTF_KEYUP, IntPtr.Zero);
+
+            await Task.Delay(80);
+
+            string text = null;
+            try
+            {
+                if (Clipboard.ContainsText())
+                    text = Clipboard.GetText();
+            }
+            catch (Exception ex)
+            {
+                Program.Log("Clipboard read failed: " + ex.Message);
+            }
+
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                Program.Log("AskSelection: clipboard was empty");
+                return;
+            }
+
+            text = text.Trim();
+            Program.Log($"AskSelection: got {text.Length} chars");
+
+            // Ensure overlay is visible and expanded.
+            if (_compact)
+                ToggleCompact();
+            if (_hud is { Visible: true })
+            {
+                _hud.Hide();
+                Show();
+                RaiseIfCovered();
+            }
+            if (!Visible)
+            {
+                Show();
+                RaiseIfCovered();
+            }
+
+            // Paste into input so the user can see what was captured.
+            _input.Text = text;
+
+            // Add to conversation and send.
+            if (_currentConversation is null)
+                StartConversation();
+            _currentConversation!.Messages.Add(new ChatMessage(false, text));
+            AddBubbleToUI(text, isAssistant: false);
+
+            await SendMessageAsync(text);
+        }
+        catch (Exception ex)
+        {
+            Program.Log("AskSelection error: " + ex);
+        }
+    }
+
 }
