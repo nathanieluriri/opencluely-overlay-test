@@ -152,7 +152,7 @@ internal sealed partial class OverlayForm
         _messages.AutoScroll = true;
         _messages.BackColor = Theme.Background;
         _messages.Padding = new Padding(2);
-        _messages.SizeChanged += (_, _) => ResizeMessageCards();
+        _messages.SizeChanged += OnMessagesSizeChanged;
 
         chat.Controls.Add(_messages);
         chat.Controls.Add(BuildComposer());

@@ -26,6 +26,9 @@ internal static class NativeMethods
     internal const uint WDA_EXCLUDEFROMCAPTURE = 0x00000011;
 
     internal const int WM_HOTKEY = 0x0312;
+    internal const int WM_NCLBUTTONDOWN = 0x00A1;
+    internal const int HTCAPTION = 2;
+
     internal const uint MOD_CONTROL = 0x0002;
     internal const uint MOD_SHIFT = 0x0004;
     internal const uint MOD_NOREPEAT = 0x4000;
@@ -63,4 +66,10 @@ internal static class NativeMethods
 
     [DllImport("user32.dll", SetLastError = true)]
     internal static extern bool UnregisterHotKey(IntPtr hWnd, int id);
+
+    [DllImport("user32.dll")]
+    internal static extern bool ReleaseCapture();
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    internal static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
 }

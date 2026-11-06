@@ -33,11 +33,9 @@ internal sealed partial class OverlayForm : Form
     private Size _restoredSize = new(760, 620);
     private bool _captureHidden;
     private bool _interactive;
-    private bool _dragging;
     private bool _compact;
     private bool _maximized;
     private bool _suppressHistorySelection;
-    private Point _dragStart;
 
     public OverlayForm()
     {
@@ -191,15 +189,16 @@ internal sealed partial class OverlayForm : Form
 
         if (_interactive)
         {
-            // Unlocking is meant to take the user straight to typing.
+            // Unlocking is meant to take the user straight to typing. Focus has
+            // to be applied after the activation message is processed.
             Activate();
-            if (!_compact) _input.Focus();
+            BeginInvoke(new Action(() =>
+            {
+                if (!_compact) _input.Focus();
+            }));
         }
         else
         {
-            _dragging = false;
-            Capture = false;
-
             if (_lastForegroundWindow != IntPtr.Zero)
             {
                 SetForegroundWindow(_lastForegroundWindow);
@@ -235,8 +234,6 @@ internal sealed partial class OverlayForm : Form
     private void EnableDrag(Control control)
     {
         control.MouseDown += BeginDrag;
-        control.MouseMove += Drag;
-        control.MouseUp += EndDrag;
 
         foreach (Control child in control.Controls)
         {
@@ -250,27 +247,12 @@ internal sealed partial class OverlayForm : Form
     {
         if (!_interactive || e.Button != MouseButtons.Left) return;
 
-        _dragging = true;
-        _dragStart = Control.MousePosition;
-        Capture = true;
-    }
-
-    private void Drag(object sender, MouseEventArgs e)
-    {
-        if (!_interactive || !_dragging) return;
-
-        var current = Control.MousePosition;
-        var deltaX = current.X - _dragStart.X;
-        var deltaY = current.Y - _dragStart.Y;
-
-        Location = new Point(Location.X + deltaX, Location.Y + deltaY);
-        _dragStart = current;
-    }
-
-    private void EndDrag(object sender, MouseEventArgs e)
-    {
-        _dragging = false;
-        Capture = false;
+        // Hand the drag to Windows itself. Tracking MouseMove by hand dropped
+        // moves once capture moved from the clicked label to the form, which is
+        // why dragging felt broken after the UI rewrite.
+        ReleaseCapture();
+        // Qualified because this class has its own SendMessage() for chat input.
+        NativeMethods.SendMessage(Handle, WM_NCLBUTTONDOWN, (IntPtr)HTCAPTION, IntPtr.Zero);
     }
 
     private void ToggleCompact()

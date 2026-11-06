@@ -6,6 +6,13 @@ namespace OverlayPoc;
 
 internal sealed partial class OverlayForm
 {
+    private const int CardPadding = 12;
+    private const int CardHeaderHeight = 22;
+    private const int CardSpacing = 10;
+
+    private int _lastMessagesWidth;
+    private bool _rendering;
+
     private void OnHistorySelectionChanged(object sender, EventArgs e)
     {
         if (_suppressHistorySelection) return;
@@ -64,6 +71,22 @@ internal sealed partial class OverlayForm
         }
     }
 
+    private void OnMessagesSizeChanged(object sender, EventArgs e)
+    {
+        if (_rendering) return;
+
+        var width = _messages.ClientSize.Width;
+        if (width <= 0) return;
+
+        // A vertical scrollbar also changes ClientSize.Width. The threshold
+        // ignores that 17px change so the conversation does not rebuild in a
+        // loop; real window resizes still reflow every card.
+        if (Math.Abs(width - _lastMessagesWidth) < 20) return;
+
+        _lastMessagesWidth = width;
+        RenderConversation();
+    }
+
     private void RefreshSelectedHistoryItem()
     {
         var index = _history.SelectedIndex;
@@ -77,6 +100,9 @@ internal sealed partial class OverlayForm
 
     private void RenderConversation()
     {
+        if (_currentConversation is null || _rendering) return;
+
+        _rendering = true;
         _messages.SuspendLayout();
         try
         {
@@ -86,108 +112,101 @@ internal sealed partial class OverlayForm
             _messages.Controls.Clear();
             foreach (var control in previous) control.Dispose();
 
-            if (_currentConversation != null)
+            foreach (var message in _currentConversation.Messages)
             {
-                foreach (var message in _currentConversation.Messages)
-                {
-                    _messages.Controls.Add(CreateMessageCard(message));
-                }
+                _messages.Controls.Add(CreateMessageCard(message));
             }
         }
         finally
         {
             _messages.ResumeLayout();
+            _rendering = false;
         }
-
-        ResizeMessageCards();
 
         if (_messages.Controls.Count > 0)
         {
-            _messages.ScrollControlIntoView(_messages.Controls[_messages.Controls.Count - 1]);
+            _messages.ScrollControlIntoView(
+                _messages.Controls[_messages.Controls.Count - 1]);
         }
     }
 
+    /// <summary>
+    /// Builds a card with an explicit size instead of AutoSize. AutoSize panels
+    /// containing docked children were the reason messages rendered with the
+    /// wrong width and clipped text.
+    /// </summary>
     private Control CreateMessageCard(ChatMessage message)
     {
+        var cardWidth = Math.Max(240, _messages.ClientSize.Width - 34);
+        var textWidth = Math.Max(180, cardWidth - CardPadding * 2);
+
+        var bodyHeight = message.Collapsed
+            ? 0
+            : TextRenderer.MeasureText(
+                message.Text,
+                Theme.Body,
+                new Size(textWidth, 10000),
+                TextFormatFlags.WordBreak).Height + 4;
+
         var card = new Panel
         {
-            Width = Math.Max(240, _messages.ClientSize.Width - 28),
-            AutoSize = true,
-            Margin = new Padding(2, 4, 6, 8),
-            Padding = new Padding(12),
+            Width = cardWidth,
+            Height = CardPadding * 2 + CardHeaderHeight + bodyHeight,
+            Margin = new Padding(0, 0, 0, CardSpacing),
             BackColor = message.IsAssistant ? Theme.InputBackground : Theme.UserBubble
-        };
-
-        var heading = new Panel
-        {
-            Dock = DockStyle.Top,
-            Height = 25,
-            BackColor = card.BackColor
         };
 
         var name = new Label
         {
-            AutoSize = true,
+            AutoSize = false,
             Text = message.IsAssistant ? "ASSISTANT" : "YOU",
             ForeColor = message.IsAssistant ? Theme.AssistantAccent : Theme.UserAccent,
             Font = Theme.CaptionBold,
-            Location = new Point(0, 3)
+            Location = new Point(CardPadding, CardPadding),
+            Size = new Size(textWidth - 32, 18),
+            TextAlign = ContentAlignment.MiddleLeft
         };
 
-        // WinForms throws "Control does not support transparent background
-        // colors" for buttons, so the collapse toggle uses the card colour.
         var toggle = new Button
         {
-            Text = "−",
-            Dock = DockStyle.Right,
-            Width = 28,
-            Height = 23,
+            Text = message.Collapsed ? "+" : "−",
             FlatStyle = FlatStyle.Flat,
             BackColor = card.BackColor,
             ForeColor = Theme.TextSecondary,
             Font = Theme.Glyph,
             Cursor = Cursors.Hand,
+            Size = new Size(24, 20),
+            Location = new Point(cardWidth - CardPadding - 24, CardPadding),
+            TabStop = false,
             FlatAppearance = { BorderSize = 0 }
-        };
-
-        var body = new Label
-        {
-            Dock = DockStyle.Top,
-            AutoSize = true,
-            MaximumSize = new Size(Math.Max(180, card.Width - 28), 0),
-            Text = message.Text,
-            ForeColor = Theme.TextPrimary,
-            Font = Theme.Body,
-            Padding = new Padding(0, 5, 0, 2)
         };
 
         toggle.Click += (_, _) =>
         {
-            body.Visible = !body.Visible;
-            toggle.Text = body.Visible ? "−" : "+";
-            card.PerformLayout();
+            message.Collapsed = !message.Collapsed;
+            // Rebuild after the click finishes, not while this button's own
+            // event handler is still on the stack (it is about to be disposed).
+            BeginInvoke(new Action(RenderConversation));
         };
 
-        heading.Controls.Add(toggle);
-        heading.Controls.Add(name);
-        card.Controls.Add(body);
-        card.Controls.Add(heading);
-        return card;
-    }
+        card.Controls.Add(name);
+        card.Controls.Add(toggle);
 
-    private void ResizeMessageCards()
-    {
-        var width = Math.Max(240, _messages.ClientSize.Width - 28);
-
-        foreach (Control card in _messages.Controls)
+        if (!message.Collapsed)
         {
-            card.Width = width;
-
-            var body = card.Controls.OfType<Label>().FirstOrDefault();
-            if (body != null)
+            var body = new Label
             {
-                body.MaximumSize = new Size(Math.Max(180, width - 28), 0);
-            }
+                AutoSize = false,
+                Text = message.Text,
+                ForeColor = Theme.TextPrimary,
+                Font = Theme.Body,
+                Location = new Point(CardPadding, CardPadding + CardHeaderHeight),
+                Size = new Size(textWidth, bodyHeight),
+                TextAlign = ContentAlignment.TopLeft
+            };
+            card.Controls.Add(body);
         }
+
+        return card;
     }
 }
