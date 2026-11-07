@@ -52,6 +52,7 @@ internal static class NativeMethods
     internal const int VK_I = 0x49;
     internal const int VK_V = 0x56;
     internal const int VK_X = 0x58;
+    internal const int VK_Y = 0x59;
     internal const int VK_C = 0x43;
     internal const int VK_SPACE = 0x20;
     internal const int VK_PRIOR = 0x21;

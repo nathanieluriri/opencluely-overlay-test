@@ -38,6 +38,7 @@ internal sealed partial class OverlayForm : Form
     private bool _maximized;
     private bool _suppressHistorySelection;
     private CancellationTokenSource _thinkingCts;
+    private bool _touchMode; // Ctrl+Shift+Y — off by default (click-through)
 
     // ── Keyboard capture (no focus change, ever) ───────────────────────
 
@@ -91,16 +92,22 @@ internal sealed partial class OverlayForm : Form
 
     // ── Window lifecycle ──────────────────────────────────────────────
 
+    protected override CreateParams CreateParams
+    {
+        get
+        {
+            var cp = base.CreateParams;
+            cp.ExStyle |= WS_EX_TOPMOST | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
+            return cp;
+        }
+    }
+
     protected override void OnHandleCreated(EventArgs e)
     {
         base.OnHandleCreated(e);
 
         try
         {
-            var exStyle = GetWindowLong(Handle, GWL_EXSTYLE);
-            exStyle |= WS_EX_TOPMOST | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
-            SetWindowLong(Handle, GWL_EXSTYLE, exStyle);
-
             _captureHidden = SetWindowDisplayAffinity(Handle, WDA_EXCLUDEFROMCAPTURE);
 
             SetHook();
@@ -129,7 +136,7 @@ internal sealed partial class OverlayForm : Form
         base.OnShown(e);
         Program.Log("FORM shown");
         _tray.ShowBalloonTip(3000, "Focus chat",
-            "Ctrl+Shift+O captures typing  ·  Ctrl+Shift+I toggles HUD  ·  Ctrl+Shift+X asks selection",
+            "Ctrl+Shift+O captures typing  ·  Ctrl+Shift+I toggles HUD  ·  Ctrl+Shift+X asks  ·  Ctrl+Shift+Y touch mode",
             ToolTipIcon.Info);
         UpdateFocusTarget();
     }
@@ -171,6 +178,7 @@ internal sealed partial class OverlayForm : Form
         menu.Items.Add("Raise now", null, (_, _) => RaiseIfCovered());
         menu.Items.Add("Toggle keyboard capture (Ctrl+Shift+O)", null, (_, _) => ToggleInteractive());
         menu.Items.Add("Toggle HUD (Ctrl+Shift+I)", null, (_, _) => ToggleHud());
+        menu.Items.Add("Toggle touch mode (Ctrl+Shift+Y)", null, (_, _) => ToggleTouchMode());
         menu.Items.Add("Open log", null, (_, _) => OpenLog());
         menu.Items.Add("Exit", null, (_, _) => Close());
 
@@ -268,6 +276,19 @@ internal sealed partial class OverlayForm : Form
             if (ctrl && shift)
             {
                 BeginInvoke(new Action(() => _ = AskSelectionAsync()));
+                return (IntPtr)1;
+            }
+        }
+
+        // ── Ctrl+Shift+Y toggles touch/interactive mode ────────────
+        if (kb.vkCode == VK_Y
+            && (wParam == (IntPtr)WM_KEYDOWN || wParam == (IntPtr)WM_SYSKEYDOWN))
+        {
+            var ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+            var shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+            if (ctrl && shift)
+            {
+                BeginInvoke(new Action(() => ToggleTouchMode()));
                 return (IntPtr)1;
             }
         }
@@ -424,7 +445,7 @@ internal sealed partial class OverlayForm : Form
         {
             _titleLabel.Text = _keyboardCaptureEnabled
                 ? "Capturing  ·  typing goes to chat  ·  Ctrl+Shift+O or Esc to stop"
-                : "Focus chat  ·  Ctrl+Shift+O type  ·  Ctrl+Shift+I HUD  ·  Ctrl+Shift+X ask selection";
+                : "Focus chat  ·  Ctrl+Shift+O type  ·  Ctrl+Shift+I HUD  ·  Ctrl+Shift+X ask  ·  Ctrl+Shift+Y touch";
         }
     }
 
@@ -524,6 +545,36 @@ internal sealed partial class OverlayForm : Form
         }
     }
 
+    // ── Touch mode toggle (Ctrl+Shift+Y) ───────────────────────────────
+
+    private void ToggleTouchMode()
+    {
+        if (!IsHandleCreated || IsDisposed) return;
+
+        _touchMode = !_touchMode;
+
+        var exStyle = GetWindowLong(Handle, GWL_EXSTYLE);
+
+        if (_touchMode)
+        {
+            // Allow mouse interaction (remove click-through).
+            exStyle &= ~WS_EX_TRANSPARENT;
+            Program.Log("Touch mode ON — overlay is interactive");
+        }
+        else
+        {
+            // Click-through, no interaction possible.
+            exStyle |= WS_EX_TRANSPARENT;
+            Program.Log("Touch mode OFF — overlay is click-through");
+        }
+
+        SetWindowLong(Handle, GWL_EXSTYLE, exStyle);
+        SetWindowPos(Handle, IntPtr.Zero, 0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+
+        UpdateInteractionVisuals();
+    }
+
     // ── Ask selection (Ctrl+Shift+V) ───────────────────────────────────
 
     private async Task AskSelectionAsync()
@@ -562,25 +613,7 @@ internal sealed partial class OverlayForm : Form
             text = text.Trim();
             Program.Log($"AskSelection: got {text.Length} chars");
 
-            // Ensure overlay is visible and expanded.
-            if (_compact)
-                ToggleCompact();
-            if (_hud is { Visible: true })
-            {
-                _hud.Hide();
-                Show();
-                RaiseIfCovered();
-            }
-            if (!Visible)
-            {
-                Show();
-                RaiseIfCovered();
-            }
-
-            // Paste into input so the user can see what was captured.
-            _input.Text = text;
-
-            // Add to conversation and send.
+            // Add to conversation and send without changing window state.
             if (_currentConversation is null)
                 StartConversation();
             _currentConversation!.Messages.Add(new ChatMessage(false, text));

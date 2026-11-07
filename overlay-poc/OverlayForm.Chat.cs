@@ -16,6 +16,10 @@ internal sealed partial class OverlayForm
         if (_currentConversation is null)
             StartConversation();
 
+        // Expand the overlay so the user can see the streaming response.
+        if (_compact)
+            ToggleCompact();
+
         _currentConversation!.Messages.Add(new ChatMessage(false, text));
         AddBubbleToUI(text, isAssistant: false);
 
@@ -62,6 +66,7 @@ internal sealed partial class OverlayForm
                     var label = bubble.Controls.OfType<Label>().FirstOrDefault();
                     if (label != null)
                         label.Text = current;
+                    _messages.ScrollControlIntoView(bubble);
                     _hud?.SetThinking(current);
                 }));
             }
