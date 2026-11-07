@@ -14,25 +14,25 @@ internal sealed class DashboardForm : Form
     private readonly ModelCatalog _catalog;
 
     // Summary cards
-    private readonly Label _totalRequests = new();
-    private readonly Label _totalTokens = new();
-    private readonly Label _totalCost = new();
-    private readonly Label _avgLatency = new();
-    private readonly Label _webSearches = new();
-    private readonly Label _webFetches = new();
-    private readonly Label _fallbacks = new();
-    private readonly Label _errors = new();
+    private Label _totalRequests;
+    private Label _totalTokens;
+    private Label _totalCost;
+    private Label _avgLatency;
+    private Label _webSearches;
+    private Label _webFetches;
+    private Label _fallbacks;
+    private Label _errors;
 
     // Per-model grid
-    private readonly DataGridView _modelGrid = new();
+    private DataGridView _modelGrid;
 
     // Recent requests
-    private readonly DataGridView _requestGrid = new();
+    private DataGridView _requestGrid;
 
     // Filters
-    private readonly ComboBox _modelFilter = new();
-    private readonly DateTimePicker _dateFrom = new();
-    private readonly DateTimePicker _dateTo = new();
+    private ComboBox _modelFilter;
+    private DateTimePicker _dateFrom;
+    private DateTimePicker _dateTo;
 
     private readonly System.Windows.Forms.Timer _refreshTimer;
 
@@ -65,6 +65,13 @@ internal sealed class DashboardForm : Form
 
     private void BuildUi()
     {
+        // Initialize controls
+        _modelGrid = new DataGridView();
+        _requestGrid = new DataGridView();
+        _modelFilter = new ComboBox();
+        _dateFrom = new DateTimePicker();
+        _dateTo = new DateTimePicker();
+
         var root = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,

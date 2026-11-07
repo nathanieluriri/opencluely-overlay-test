@@ -40,7 +40,6 @@ internal sealed class OpenRouterService
         var record = new RequestRecord { RequestType = "text" };
         var sw = System.Diagnostics.Stopwatch.StartNew();
 
-        // Route
         var route = await _router.RouteAsync(new RouteRequest
         {
             RequiresTools = false,
@@ -59,29 +58,19 @@ internal sealed class OpenRouterService
             throw new ApplicationException(route.FailureReason);
         }
 
-        var fullText = new StringBuilder();
-        string error = null;
-
+        // yield in try/finally (no catch) is allowed by C#
         try
         {
             await foreach (var delta in StreamChatCompletionsAsync(
                 conversation, route.Model, null, _config, ct))
             {
-                fullText.Append(delta);
                 yield return delta;
             }
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            error = ex.Message;
-            throw;
         }
         finally
         {
             sw.Stop();
             record.Latency = sw.Elapsed;
-            record.ErrorMessage = error;
-            // Usage extraction happens in the streaming method via callback
             _tracker.Record(record);
         }
     }
@@ -114,7 +103,6 @@ internal sealed class OpenRouterService
             throw new ApplicationException(route.FailureReason);
         }
 
-        string error = null;
         try
         {
             await foreach (var delta in StreamChatCompletionsAsync(
@@ -123,16 +111,10 @@ internal sealed class OpenRouterService
                 yield return delta;
             }
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            error = ex.Message;
-            throw;
-        }
         finally
         {
             sw.Stop();
             record.Latency = sw.Elapsed;
-            record.ErrorMessage = error;
             _tracker.Record(record);
         }
     }
@@ -167,7 +149,6 @@ internal sealed class OpenRouterService
             throw new ApplicationException(route.FailureReason);
         }
 
-        string error = null;
         try
         {
             await foreach (var chunk in StreamResponsesApiAsync(conversation, route.Model, _config, ct, record))
@@ -175,16 +156,10 @@ internal sealed class OpenRouterService
                 yield return chunk;
             }
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            error = ex.Message;
-            throw;
-        }
         finally
         {
             sw.Stop();
             record.Latency = sw.Elapsed;
-            record.ErrorMessage = error;
             _tracker.Record(record);
         }
     }

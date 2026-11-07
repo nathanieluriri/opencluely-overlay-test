@@ -1,6 +1,7 @@
 using System.Drawing;
 using System.Windows.Forms;
 using OverlayPoc.Chat;
+using OverlayPoc.Models;
 using OverlayPoc.Services;
 
 namespace OverlayPoc;
