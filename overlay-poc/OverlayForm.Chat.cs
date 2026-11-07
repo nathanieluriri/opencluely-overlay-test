@@ -1,6 +1,7 @@
 using System.Drawing;
 using System.Windows.Forms;
 using OverlayPoc.Chat;
+using OverlayPoc.Services;
 
 namespace OverlayPoc;
 
@@ -51,10 +52,8 @@ internal sealed partial class OverlayForm
         if (_currentConversation is null)
             StartConversation();
 
-        // Create a placeholder assistant bubble that we will update as tokens stream in.
         var bubble = AddStreamingBubble();
 
-        // Cancel and dispose any in-flight request.
         _thinkingCts?.Cancel();
         _thinkingCts?.Dispose();
         _thinkingCts = new CancellationTokenSource();
@@ -67,22 +66,23 @@ internal sealed partial class OverlayForm
         {
             var conversation = _currentConversation!;
 
-            await foreach (var delta in OpenRouterClient.StreamAsync(
-                               conversation.Messages, _config, ct))
+            // Use the new OpenRouterService for text requests
+            if (_aiService is not null)
             {
-                fullText += delta;
-
-                // Update bubble on UI thread.
-                var current = fullText;
-                BeginInvoke(new Action(() =>
+                await foreach (var delta in _aiService.StreamChatAsync(conversation.Messages, ct))
                 {
-                    if (bubble.IsDisposed) return;
-                    var label = bubble.Controls.OfType<Label>().FirstOrDefault();
-                    if (label != null)
-                        label.Text = current;
-                    ScrollToBubbleThrottled(bubble);
-                    _hud?.SetThinking(current);
-                }));
+                    fullText += delta;
+                    var current = fullText;
+                    BeginInvoke(new Action(() =>
+                    {
+                        if (bubble.IsDisposed) return;
+                        var label = bubble.Controls.OfType<Label>().FirstOrDefault();
+                        if (label != null)
+                            label.Text = current;
+                        ScrollToBubbleThrottled(bubble);
+                        _hud?.SetThinking(current);
+                    }));
+                }
             }
         }
         catch (OperationCanceledException)
@@ -95,7 +95,6 @@ internal sealed partial class OverlayForm
             Program.Log("LLM error: " + ex);
         }
 
-        // Final update.
         var finalText = fullText;
         var wasError = fullText.StartsWith("Error:");
         BeginInvoke(new Action(() =>
@@ -107,8 +106,6 @@ internal sealed partial class OverlayForm
                     label.Text = finalText;
             }
 
-            // Only add successful responses to conversation history.
-            // Error messages should not pollute the context for future requests.
             if (!wasError && _currentConversation != null && !string.IsNullOrWhiteSpace(finalText))
                 _currentConversation.Messages.Add(new ChatMessage(true, finalText));
 
@@ -197,7 +194,6 @@ internal sealed partial class OverlayForm
         if (conversation is null || string.IsNullOrWhiteSpace(newTitle)) return;
         conversation.Title = newTitle.Trim();
 
-        // Refresh the ListBox display
         var index = _history.Items.IndexOf(conversation);
         if (index >= 0)
         {
@@ -228,7 +224,6 @@ internal sealed partial class OverlayForm
         }
         else if (e.KeyCode == Keys.F2)
         {
-            // Simple inline rename via input box
             var newTitle = Microsoft.VisualBasic.Interaction.InputBox(
                 "Rename conversation:", "Rename", conversation.Title);
             if (!string.IsNullOrWhiteSpace(newTitle))

@@ -4,6 +4,8 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows.Forms;
 using OverlayPoc.Chat;
+using OverlayPoc.Models;
+using OverlayPoc.Services;
 using static OverlayPoc.NativeMethods;
 
 namespace OverlayPoc;
@@ -28,6 +30,12 @@ internal sealed partial class OverlayForm : Form
     private readonly LlmConfig _config;
     private readonly HudForm _hud;
 
+    // ── Service layer ─────────────────────────────────────────────────
+    private readonly UsageTracker _usageTracker;
+    private readonly ModelCatalog _modelCatalog;
+    private readonly OpenRouterService _aiService;
+    private readonly ToolRegistry _toolRegistry;
+
     private Button _interactiveButton;
     private ChatConversation _currentConversation;
     private Label _titleLabel;
@@ -39,6 +47,7 @@ internal sealed partial class OverlayForm : Form
     private bool _suppressHistorySelection;
     private CancellationTokenSource _thinkingCts;
     private bool _touchMode; // Ctrl+Shift+Y — off by default (click-through)
+    private DashboardForm _dashboard;
 
     // ── Keyboard capture (no focus change, ever) ───────────────────────
 
@@ -53,6 +62,12 @@ internal sealed partial class OverlayForm : Form
         _hookProc = KeyboardProc;
         _config = LlmConfigLoader.Load();
         Program.Log($"Config loaded. model={_config.Model} hasKey={_config.HasApiKey}");
+
+        // Initialize service layer
+        _usageTracker = new UsageTracker { Enabled = _config.EnableUsageTracking };
+        _modelCatalog = new ModelCatalog(_config.ApiKey, _config.BaseUrl);
+        _aiService = new OpenRouterService(_config, _usageTracker, _modelCatalog);
+        _toolRegistry = new ToolRegistry();
 
         _hud = new HudForm();
 
@@ -182,6 +197,7 @@ internal sealed partial class OverlayForm : Form
         menu.Items.Add("Toggle touch mode (tray only)", null, (_, _) => ToggleTouchMode());
         menu.Items.Add("Screenshot & ask (Ctrl+Shift+S when capturing)", null, (_, _) => _ = AskScreenshotAsync());
         menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add("Dashboard…", null, (_, _) => ShowDashboard());
         menu.Items.Add("Settings…", null, (_, _) => ShowSettings());
         menu.Items.Add("Open log", null, (_, _) => OpenLog());
         menu.Items.Add("Exit", null, (_, _) => Close());
@@ -534,11 +550,27 @@ internal sealed partial class OverlayForm : Form
             if (_settingsForm.Saved)
             {
                 Program.Log($"Settings applied. model={_config.Model} vision={_config.VisionModel ?? "(same)"} hasKey={_config.HasApiKey}");
+                // Rebuild service with new config
+                // (The service holds a reference to the same _config object, so it sees updates)
             }
             _settingsForm.Dispose();
             _settingsForm = null;
         };
-        _settingsForm.Show(); // Show normally — settings form is interactive, user needs to click it
+        _settingsForm.Show();
+    }
+
+    private void ShowDashboard()
+    {
+        if (_dashboard is { IsDisposed: false })
+        {
+            _dashboard.BringToFront();
+            _dashboard.Focus();
+            return;
+        }
+
+        _dashboard = new DashboardForm(_usageTracker, _modelCatalog);
+        _dashboard.FormClosed += (_, _) => _dashboard = null;
+        _dashboard.Show();
     }
 
     // ── HUD toggle (Ctrl+Shift+I) ─────────────────────────────────────
@@ -737,21 +769,24 @@ internal sealed partial class OverlayForm : Form
         {
             var conversation = _currentConversation!;
 
-            await foreach (var delta in OpenRouterClient.StreamWithImageAsync(
-                               conversation.Messages, imageBase64, _config, ct))
+            // Use the new OpenRouterService for vision requests
+            if (_aiService is not null)
             {
-                fullText += delta;
-
-                var current = fullText;
-                BeginInvoke(new Action(() =>
+                await foreach (var delta in _aiService.StreamVisionAsync(
+                                   conversation.Messages, imageBase64, ct))
                 {
-                    if (bubble.IsDisposed) return;
-                    var label = bubble.Controls.OfType<Label>().FirstOrDefault();
-                    if (label != null)
-                        label.Text = current;
-                    _messages.ScrollControlIntoView(bubble);
-                    _hud?.SetThinking(current);
-                }));
+                    fullText += delta;
+                    var current = fullText;
+                    BeginInvoke(new Action(() =>
+                    {
+                        if (bubble.IsDisposed) return;
+                        var label = bubble.Controls.OfType<Label>().FirstOrDefault();
+                        if (label != null)
+                            label.Text = current;
+                        _messages.ScrollControlIntoView(bubble);
+                        _hud?.SetThinking(current);
+                    }));
+                }
             }
         }
         catch (OperationCanceledException)
@@ -775,7 +810,6 @@ internal sealed partial class OverlayForm : Form
                     label.Text = finalText;
             }
 
-            // Only add successful responses to conversation history.
             if (!wasError && _currentConversation != null && !string.IsNullOrWhiteSpace(finalText))
                 _currentConversation.Messages.Add(new ChatMessage(true, finalText));
 
