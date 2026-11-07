@@ -88,6 +88,7 @@ internal static class NativeMethods
     internal const int VK_LMENU = 0xA4;
     internal const int VK_RMENU = 0xA5;
     internal const int VK_S = 0x53;
+    internal const int VK_R = 0x52;
     internal const int VK_OEM_3 = 0xC0; // Backtick / tilde key (`~)
 
     [StructLayout(LayoutKind.Sequential)]

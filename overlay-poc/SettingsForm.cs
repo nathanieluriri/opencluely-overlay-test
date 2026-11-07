@@ -22,16 +22,21 @@ internal sealed class SettingsForm : Form
 
     // Tool settings
     private readonly CheckBox _enableWebSearch = new();
-    private readonly TextBox _webSearchEngine = new();
+    private readonly ComboBox _webSearchEngine = new();
     private readonly NumericUpDown _webSearchMaxResults = new();
     private readonly TextBox _webSearchAllowedDomains = new();
     private readonly TextBox _webSearchExcludedDomains = new();
 
     private readonly CheckBox _enableWebFetch = new();
-    private readonly TextBox _webFetchEngine = new();
+    private readonly ComboBox _webFetchEngine = new();
     private readonly NumericUpDown _webFetchMaxUses = new();
     private readonly TextBox _webFetchAllowedDomains = new();
     private readonly TextBox _webFetchBlockedDomains = new();
+
+    // Provider-specific search engines
+    private readonly ComboBox _openAISearchEngine = new();
+    private readonly ComboBox _geminiSearchEngine = new();
+    private readonly ComboBox _defaultSearchEngine = new();
 
     // Cost controls
     private readonly NumericUpDown _spendingLimit = new();
@@ -58,7 +63,7 @@ internal sealed class SettingsForm : Form
         BackColor = Theme.Background;
         ForeColor = Theme.TextPrimary;
         Font = Theme.Body;
-        ClientSize = new Size(560, 900);
+        ClientSize = new Size(560, 1000);
 
         BuildUi();
         LoadFromConfig();
@@ -83,14 +88,14 @@ internal sealed class SettingsForm : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 2,
-            RowCount = 22,
+            RowCount = 42,
             Padding = new Padding(16),
             BackColor = Theme.Background,
             AutoScroll = true
         };
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 140));
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        for (var i = 0; i < 22; i++)
+        for (var i = 0; i < 42; i++)
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
         var row = 0;
@@ -176,11 +181,35 @@ internal sealed class SettingsForm : Form
         _enableWebSearch.AutoSize = true;
         root.Controls.Add(_enableWebSearch, 1, row++);
 
-        root.Controls.Add(MakeLabel("Search Engine"), 0, row);
+        // Global engine override
+        root.Controls.Add(MakeLabel("Engine Override"), 0, row);
         _webSearchEngine.Dock = DockStyle.Fill;
         StyleInput(_webSearchEngine);
-        _webSearchEngine.PlaceholderText = "auto, exa, parallel, perplexity, firecrawl, native";
+        _webSearchEngine.Items.AddRange(new[] { "auto", "native", "exa", "parallel", "perplexity", "firecrawl" });
+        _webSearchEngine.DropDownStyle = ComboBoxStyle.DropDown;
         root.Controls.Add(_webSearchEngine, 1, row++);
+
+        // Provider-specific engines
+        root.Controls.Add(MakeLabel("OpenAI Engine"), 0, row);
+        _openAISearchEngine.Dock = DockStyle.Fill;
+        StyleInput(_openAISearchEngine);
+        _openAISearchEngine.Items.AddRange(new[] { "native", "exa", "parallel", "perplexity" });
+        _openAISearchEngine.DropDownStyle = ComboBoxStyle.DropDown;
+        root.Controls.Add(_openAISearchEngine, 1, row++);
+
+        root.Controls.Add(MakeLabel("Gemini Engine"), 0, row);
+        _geminiSearchEngine.Dock = DockStyle.Fill;
+        StyleInput(_geminiSearchEngine);
+        _geminiSearchEngine.Items.AddRange(new[] { "native", "exa", "parallel", "perplexity" });
+        _geminiSearchEngine.DropDownStyle = ComboBoxStyle.DropDown;
+        root.Controls.Add(_geminiSearchEngine, 1, row++);
+
+        root.Controls.Add(MakeLabel("Default Engine"), 0, row);
+        _defaultSearchEngine.Dock = DockStyle.Fill;
+        StyleInput(_defaultSearchEngine);
+        _defaultSearchEngine.Items.AddRange(new[] { "exa", "parallel", "perplexity", "firecrawl" });
+        _defaultSearchEngine.DropDownStyle = ComboBoxStyle.DropDown;
+        root.Controls.Add(_defaultSearchEngine, 1, row++);
 
         root.Controls.Add(MakeLabel("Max Results"), 0, row);
         _webSearchMaxResults.Dock = DockStyle.Left;
@@ -216,7 +245,8 @@ internal sealed class SettingsForm : Form
         root.Controls.Add(MakeLabel("Fetch Engine"), 0, row);
         _webFetchEngine.Dock = DockStyle.Fill;
         StyleInput(_webFetchEngine);
-        _webFetchEngine.PlaceholderText = "auto, exa, openrouter, firecrawl, parallel, native";
+        _webFetchEngine.Items.AddRange(new[] { "auto", "native", "exa", "openrouter", "parallel", "firecrawl" });
+        _webFetchEngine.DropDownStyle = ComboBoxStyle.DropDown;
         root.Controls.Add(_webFetchEngine, 1, row++);
 
         root.Controls.Add(MakeLabel("Max Fetch Uses"), 0, row);
@@ -326,6 +356,7 @@ internal sealed class SettingsForm : Form
         if (input is TextBox tb) tb.BorderStyle = BorderStyle.FixedSingle;
         if (input is NumericUpDown nud) nud.BorderStyle = BorderStyle.FixedSingle;
         if (input is ListBox lb) lb.BorderStyle = BorderStyle.FixedSingle;
+        if (input is ComboBox cb) cb.FlatStyle = FlatStyle.Flat;
     }
 
     private static Label MakeLabel(string text) => new()
@@ -361,6 +392,9 @@ internal sealed class SettingsForm : Form
 
         _enableWebSearch.Checked = _config.EnableWebSearch;
         _webSearchEngine.Text = _config.WebSearchEngine;
+        _openAISearchEngine.Text = _config.OpenAISearchEngine;
+        _geminiSearchEngine.Text = _config.GeminiSearchEngine;
+        _defaultSearchEngine.Text = _config.DefaultSearchEngine;
         _webSearchMaxResults.Value = Math.Clamp(_config.WebSearchMaxResults, 1, 25);
         _webSearchAllowedDomains.Text = string.Join(", ", _config.WebSearchAllowedDomains);
         _webSearchExcludedDomains.Text = string.Join(", ", _config.WebSearchExcludedDomains);
@@ -391,6 +425,9 @@ internal sealed class SettingsForm : Form
 
         _config.EnableWebSearch = _enableWebSearch.Checked;
         _config.WebSearchEngine = _webSearchEngine.Text.Trim();
+        _config.OpenAISearchEngine = _openAISearchEngine.Text.Trim();
+        _config.GeminiSearchEngine = _geminiSearchEngine.Text.Trim();
+        _config.DefaultSearchEngine = _defaultSearchEngine.Text.Trim();
         _config.WebSearchMaxResults = (int)_webSearchMaxResults.Value;
         _config.WebSearchAllowedDomains = _webSearchAllowedDomains.Text
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)

@@ -52,6 +52,15 @@ internal sealed partial class OverlayForm
         if (_currentConversation is null)
             StartConversation();
 
+        // Auto-detect research queries that benefit from web search
+        var useTools = ShouldUseTools(text);
+
+        if (useTools && (_config.EnableWebSearch || _config.EnableWebFetch))
+        {
+            await SendMessageWithToolsAsync();
+            return;
+        }
+
         var bubble = AddStreamingBubble();
 
         _thinkingCts?.Cancel();
@@ -111,6 +120,119 @@ internal sealed partial class OverlayForm
 
             _hud?.SetResponse(finalText);
         }));
+    }
+
+    /// <summary>Send a message using the Responses API with server tools.</summary>
+    internal async Task SendMessageWithToolsAsync()
+    {
+        if (!_config.HasApiKey)
+        {
+            AddBubbleToUI("No API key configured.", isAssistant: true);
+            return;
+        }
+
+        if (_currentConversation is null)
+            StartConversation();
+
+        var bubble = AddStreamingBubble();
+
+        _thinkingCts?.Cancel();
+        _thinkingCts?.Dispose();
+        _thinkingCts = new CancellationTokenSource();
+        var ct = _thinkingCts.Token;
+
+        _hud?.SetThinking();
+
+        var fullText = "";
+        try
+        {
+            var conversation = _currentConversation!;
+
+            if (_aiService is not null)
+            {
+                await foreach (var chunk in _aiService.StreamWithToolsAsync(conversation.Messages, ct))
+                {
+                    if (chunk.Text is not null)
+                    {
+                        fullText += chunk.Text;
+                        var current = fullText;
+                        BeginInvoke(new Action(() =>
+                        {
+                            if (bubble.IsDisposed) return;
+                            var label = bubble.Controls.OfType<Label>().FirstOrDefault();
+                            if (label != null)
+                                label.Text = current;
+                            ScrollToBubbleThrottled(bubble);
+                            _hud?.SetThinking(current);
+                        }));
+                    }
+
+                    if (chunk.ToolCall is not null)
+                    {
+                        var toolName = chunk.ToolCall;
+                        BeginInvoke(new Action(() =>
+                        {
+                            _hud?.SetThinking($"[{toolName}...]");
+                        }));
+                    }
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            fullText += "\r\n\r\n[cancelled]";
+        }
+        catch (Exception ex)
+        {
+            fullText = $"Error: {ex.Message}";
+            Program.Log("LLM tools error: " + ex);
+        }
+
+        var finalText = fullText;
+        var wasError = fullText.StartsWith("Error:");
+        BeginInvoke(new Action(() =>
+        {
+            if (!bubble.IsDisposed)
+            {
+                var label = bubble.Controls.OfType<Label>().FirstOrDefault();
+                if (label != null)
+                    label.Text = finalText;
+            }
+
+            if (!wasError && _currentConversation != null && !string.IsNullOrWhiteSpace(finalText))
+                _currentConversation.Messages.Add(new ChatMessage(true, finalText));
+
+            _hud?.SetResponse(finalText);
+        }));
+    }
+
+    /// <summary>Detect if a message likely needs web search or fetch.</summary>
+    private static bool ShouldUseTools(string text)
+    {
+        var lower = text.ToLowerInvariant();
+
+        // Time-sensitive keywords
+        string[] timeKeywords = {
+            "today", "latest", "recent", "current", "news", "update",
+            "this week", "this month", "this year", "right now",
+            "just announced", "just released", "breaking",
+            "price of", "cost of", "how much is",
+            "weather", "stock", "exchange rate",
+            "what happened", "who won", "score"
+        };
+
+        // Research keywords
+        string[] researchKeywords = {
+            "search for", "look up", "find out", "research",
+            "what is the latest", "tell me about",
+            "compare", "vs ", "versus", "difference between",
+            "review", "reviews", "rating",
+            "download", "install", "documentation",
+            "github", "stackoverflow"
+        };
+
+        return timeKeywords.Any(k => lower.Contains(k)) ||
+               researchKeywords.Any(k => lower.Contains(k));
     }
 
     /// <summary>Creates an empty assistant bubble and returns its panel for streaming updates.</summary>

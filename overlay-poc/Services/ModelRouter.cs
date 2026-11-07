@@ -20,6 +20,8 @@ internal sealed class ModelRouter
     /// <summary>
     /// Select the best model for a request.
     /// Returns the model ID and whether it's a fallback.
+    /// When tools are required, prefers models with native search support
+    /// (OpenAI, Gemini) over models that need Exa fallback.
     /// </summary>
     public async Task<RouteResult> RouteAsync(RouteRequest request)
     {
@@ -32,7 +34,27 @@ internal sealed class ModelRouter
         if (result.Success)
             return result;
 
-        // 2. Try fallback models in order
+        // 2. When tools are required, try provider-native models first
+        //    (OpenAI/Gemini have built-in search, DeepSeek needs Exa)
+        if (request.RequiresTools)
+        {
+            var nativeModels = GetNativeSearchModels(request.HasImage);
+            foreach (var nativeId in nativeModels)
+            {
+                if (nativeId.Equals(primaryModel, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                result = await TryModelAsync(nativeId, request, isFallback: true,
+                    reason: $"Native search provider preferred over {primaryModel}");
+                if (result.Success)
+                {
+                    Program.Log($"Fallback (native search): {primaryModel} → {nativeId}");
+                    return result;
+                }
+            }
+        }
+
+        // 3. Try fallback models in order
         foreach (var fallbackId in _config.FallbackModels)
         {
             if (fallbackId.Equals(primaryModel, StringComparison.OrdinalIgnoreCase))
@@ -47,13 +69,48 @@ internal sealed class ModelRouter
             }
         }
 
-        // 3. No model available
+        // 4. No model available
         return new RouteResult
         {
             Success = false,
             Model = primaryModel,
             FailureReason = "No suitable model found for this request."
         };
+    }
+
+    /// <summary>Get models with native web search support, ordered by cost.</summary>
+    private List<string> GetNativeSearchModels(bool needVision)
+    {
+        // OpenAI models with native search (GPT-4.1+, GPT-5+, o3, o4-mini)
+        // Gemini models with native grounding (2.5+, 3+, 3.1+, 3.5+)
+        var candidates = new List<(string Id, decimal Cost, bool Vision)>
+        {
+            // OpenAI — cheapest first
+            ("openai/gpt-4o-mini", 0.00000015m, true),
+            ("openai/gpt-4.1-nano", 0.00000010m, true),
+            ("openai/gpt-4.1-mini", 0.00000040m, true),
+            ("openai/gpt-4o", 0.0000025m, true),
+            ("openai/gpt-4.1", 0.000002m, true),
+            ("openai/gpt-5-mini", 0.00000025m, true),
+            ("openai/gpt-5-nano", 0.00000005m, true),
+            ("openai/gpt-5", 0.00000125m, true),
+            ("openai/o3", 0.000002m, true),
+
+            // Gemini — cheapest first
+            ("google/gemini-2.5-flash-lite", 0.00000010m, true),
+            ("google/gemini-2.5-flash", 0.00000030m, true),
+            ("google/gemini-3.1-flash-lite", 0.00000025m, true),
+            ("google/gemini-3.5-flash-lite", 0.00000030m, true),
+            ("google/gemini-2.5-pro", 0.00000125m, true),
+            ("google/gemini-3.5-flash", 0.0000015m, true),
+            ("google/gemini-3.1-pro-preview", 0.000002m, true),
+        };
+
+        return candidates
+            .Where(c => !needVision || c.Vision)
+            .OrderBy(c => c.Cost)
+            .Select(c => c.Id)
+            .ToList();
     }
 
     private async Task<RouteResult> TryModelAsync(

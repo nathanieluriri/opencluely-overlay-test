@@ -66,8 +66,8 @@ internal sealed partial class OverlayForm : Form
         // Initialize service layer
         _usageTracker = new UsageTracker { Enabled = _config.EnableUsageTracking };
         _modelCatalog = new ModelCatalog(_config.ApiKey, _config.BaseUrl);
-        _aiService = new OpenRouterService(_config, _usageTracker, _modelCatalog);
         _toolRegistry = new ToolRegistry();
+        _aiService = new OpenRouterService(_config, _usageTracker, _modelCatalog, _toolRegistry);
 
         _hud = new HudForm();
 
@@ -197,6 +197,7 @@ internal sealed partial class OverlayForm : Form
         menu.Items.Add("Toggle touch mode (tray only)", null, (_, _) => ToggleTouchMode());
         menu.Items.Add("Screenshot & ask (Ctrl+Shift+S when capturing)", null, (_, _) => _ = AskScreenshotAsync());
         menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add("Ask with web search", null, (_, _) => AskWithSearch());
         menu.Items.Add("Dashboard…", null, (_, _) => ShowDashboard());
         menu.Items.Add("Settings…", null, (_, _) => ShowSettings());
         menu.Items.Add("Open log", null, (_, _) => OpenLog());
@@ -288,6 +289,13 @@ internal sealed partial class OverlayForm : Form
             if (kb.vkCode == VK_S && ctrl && shift)
             {
                 BeginInvoke(new Action(() => _ = AskScreenshotAsync()));
+                return (IntPtr)1;
+            }
+
+            // ── Ctrl+Shift+R asks with web search ──
+            if (kb.vkCode == VK_R && ctrl && shift)
+            {
+                BeginInvoke(new Action(() => AskWithSearch()));
                 return (IntPtr)1;
             }
 
@@ -453,7 +461,7 @@ internal sealed partial class OverlayForm : Form
         {
             _titleLabel.Text = _keyboardCaptureEnabled
                 ? "Capturing  ·  typing goes to chat  ·  Ctrl+Shift+` or Esc to stop"
-                : "Focus chat  ·  Ctrl+Shift+` type  ·  tray for HUD/touch  ·  Ctrl+Shift+X/S when capturing";
+                : "Focus chat  ·  Ctrl+Shift+` type  ·  Ctrl+Shift+X copy/ask  ·  Ctrl+Shift+S screenshot  ·  Ctrl+Shift+R research";
         }
     }
 
@@ -571,6 +579,16 @@ internal sealed partial class OverlayForm : Form
         _dashboard = new DashboardForm(_usageTracker, _modelCatalog);
         _dashboard.FormClosed += (_, _) => _dashboard = null;
         _dashboard.Show();
+    }
+
+    /// <summary>Force the next message to use web search/fetch tools, then keep them on.</summary>
+    internal void AskWithSearch()
+    {
+        if (_input.Text.Trim().Length == 0) return;
+
+        _config.EnableWebSearch = true;
+        _config.EnableWebFetch = true;
+        SendMessage();
     }
 
     // ── HUD toggle (Ctrl+Shift+I) ─────────────────────────────────────

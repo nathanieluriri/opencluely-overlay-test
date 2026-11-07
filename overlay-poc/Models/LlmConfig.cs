@@ -24,8 +24,11 @@ internal sealed class LlmConfig
     public List<string> FallbackModels { get; set; } = new()
     {
         "deepseek/deepseek-v4.1-flash",
+        "openai/gpt-4o-mini",
+        "google/gemini-2.5-flash",
         "deepseek/deepseek-chat",
-        "openai/gpt-4o-mini"
+        "openai/gpt-4o",
+        "google/gemini-2.5-flash-lite"
     };
 
     // ── Prompts ────────────────────────────────────────────────────────
@@ -70,9 +73,32 @@ internal sealed class LlmConfig
     public int MaxToolCallsPerRequest { get; set; } = 30;
     public bool EnableUsageTracking { get; set; } = true;
 
+    // ── Provider-specific search engine overrides ──────────────────────
+    /// <summary>Search engine for OpenAI models. "native" uses OpenAI's built-in search.</summary>
+    public string OpenAISearchEngine { get; set; } = "native";
+
+    /// <summary>Search engine for Gemini models. "native" uses Google's built-in grounding.</summary>
+    public string GeminiSearchEngine { get; set; } = "native";
+
+    /// <summary>Search engine for all other models (DeepSeek, etc.).</summary>
+    public string DefaultSearchEngine { get; set; } = "exa";
+
     // ── Helpers ────────────────────────────────────────────────────────
     [JsonIgnore]
     public bool HasApiKey => !string.IsNullOrWhiteSpace(ApiKey);
+
+    /// <summary>Resolve the search engine to use for a given model.</summary>
+    public string ResolveSearchEngine(string modelId)
+    {
+        if (!string.IsNullOrWhiteSpace(WebSearchEngine) && WebSearchEngine != "auto")
+            return WebSearchEngine;
+
+        if (modelId.StartsWith("openai/", StringComparison.OrdinalIgnoreCase))
+            return OpenAISearchEngine;
+        if (modelId.StartsWith("google/", StringComparison.OrdinalIgnoreCase))
+            return GeminiSearchEngine;
+        return DefaultSearchEngine;
+    }
 }
 
 internal static class LlmConfigLoader
@@ -128,6 +154,9 @@ internal static class LlmConfigLoader
                     config.SpendingLimitUsd = fromFile.SpendingLimitUsd;
                     if (fromFile.MaxToolCallsPerRequest > 0) config.MaxToolCallsPerRequest = fromFile.MaxToolCallsPerRequest;
                     config.EnableUsageTracking = fromFile.EnableUsageTracking;
+                    if (!string.IsNullOrWhiteSpace(fromFile.OpenAISearchEngine)) config.OpenAISearchEngine = fromFile.OpenAISearchEngine;
+                    if (!string.IsNullOrWhiteSpace(fromFile.GeminiSearchEngine)) config.GeminiSearchEngine = fromFile.GeminiSearchEngine;
+                    if (!string.IsNullOrWhiteSpace(fromFile.DefaultSearchEngine)) config.DefaultSearchEngine = fromFile.DefaultSearchEngine;
                 }
             }
         }

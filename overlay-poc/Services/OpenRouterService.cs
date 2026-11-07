@@ -18,12 +18,14 @@ internal sealed class OpenRouterService
     private readonly LlmConfig _config;
     private readonly UsageTracker _tracker;
     private readonly ModelRouter _router;
+    private readonly ToolRegistry _toolRegistry;
 
-    public OpenRouterService(LlmConfig config, UsageTracker tracker, ModelCatalog catalog)
+    public OpenRouterService(LlmConfig config, UsageTracker tracker, ModelCatalog catalog, ToolRegistry toolRegistry = null)
     {
         _config = config;
         _tracker = tracker;
         _router = new ModelRouter(catalog, config);
+        _toolRegistry = toolRegistry;
     }
 
     // ══════════════════════════════════════════════════════════════════
@@ -375,8 +377,12 @@ internal sealed class OpenRouterService
         if (config.EnableWebSearch)
         {
             var searchParams = new Dictionary<string, object>();
-            if (!string.IsNullOrWhiteSpace(config.WebSearchEngine) && config.WebSearchEngine != "auto")
-                searchParams["engine"] = config.WebSearchEngine;
+
+            // Use provider-aware search engine resolution
+            var engine = config.ResolveSearchEngine(model);
+            if (!string.IsNullOrWhiteSpace(engine) && engine != "auto")
+                searchParams["engine"] = engine;
+
             if (config.WebSearchMaxResults > 0)
                 searchParams["max_results"] = config.WebSearchMaxResults;
             if (config.WebSearchMaxTotalResults > 0)
@@ -414,6 +420,13 @@ internal sealed class OpenRouterService
                 type = "openrouter:web_fetch",
                 parameters = fetchParams.Count > 0 ? fetchParams : null
             });
+        }
+
+        // Add user-defined custom tools from the registry
+        if (_toolRegistry is not null)
+        {
+            var customTools = _toolRegistry.BuildToolSchemas();
+            tools.AddRange(customTools);
         }
 
         var requestBody = new Dictionary<string, object>
