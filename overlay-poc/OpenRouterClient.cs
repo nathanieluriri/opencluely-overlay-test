@@ -10,6 +10,9 @@ namespace OverlayPoc;
 /// </summary>
 internal static class OpenRouterClient
 {
+    // Reuse a single HttpClient to avoid socket exhaustion.
+    private static readonly HttpClient SharedClient = new() { Timeout = TimeSpan.FromMinutes(10) };
+
     private sealed class Message
     {
         public string role { get; set; } = "";
@@ -48,8 +51,6 @@ internal static class OpenRouterClient
         LlmConfig config,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
     {
-        using var client = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
-
         using var request = new HttpRequestMessage(
             HttpMethod.Post,
             $"{config.BaseUrl.TrimEnd('/')}/chat/completions");
@@ -59,7 +60,7 @@ internal static class OpenRouterClient
         request.Headers.TryAddWithoutValidation("X-Title", "OverlayPoc");
         request.Content = new StringContent(BuildRequestBody(conversation, config), Encoding.UTF8, "application/json");
 
-        using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+        using var response = await SharedClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
         if (!response.IsSuccessStatusCode)
         {
             var body = await response.Content.ReadAsStringAsync(ct);
@@ -70,8 +71,9 @@ internal static class OpenRouterClient
         using var reader = new StreamReader(stream);
 
         string line;
-        while ((line = await reader.ReadLineAsync(ct)) is not null)
+        while ((line = await reader.ReadLineAsync()) is not null)
         {
+            if (ct.IsCancellationRequested) yield break;
             if (!line.StartsWith("data:")) continue;
 
             var data = line.Substring(5).Trim();
@@ -132,7 +134,7 @@ internal static class OpenRouterClient
 
         var request = new Request
         {
-            model = config.VisionModel ?? config.Model,
+            model = !string.IsNullOrWhiteSpace(config.VisionModel) ? config.VisionModel : config.Model,
             messages = messages,
             max_tokens = config.MaxTokens > 0 ? config.MaxTokens : 2048
         };
@@ -146,8 +148,6 @@ internal static class OpenRouterClient
         LlmConfig config,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
     {
-        using var client = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
-
         using var request = new HttpRequestMessage(
             HttpMethod.Post,
             $"{config.BaseUrl.TrimEnd('/')}/chat/completions");
@@ -157,7 +157,7 @@ internal static class OpenRouterClient
         request.Headers.TryAddWithoutValidation("X-Title", "OverlayPoc");
         request.Content = new StringContent(BuildVisionRequestBody(conversation, imageBase64, config), Encoding.UTF8, "application/json");
 
-        using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+        using var response = await SharedClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
         if (!response.IsSuccessStatusCode)
         {
             var body = await response.Content.ReadAsStringAsync(ct);
@@ -168,8 +168,9 @@ internal static class OpenRouterClient
         using var reader = new StreamReader(stream);
 
         string line;
-        while ((line = await reader.ReadLineAsync(ct)) is not null)
+        while ((line = await reader.ReadLineAsync()) is not null)
         {
+            if (ct.IsCancellationRequested) yield break;
             if (!line.StartsWith("data:")) continue;
 
             var data = line.Substring(5).Trim();

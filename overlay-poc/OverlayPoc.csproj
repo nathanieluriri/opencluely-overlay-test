@@ -11,4 +11,7 @@
     <PublishTrimmed>false</PublishTrimmed>
     <AssemblyName>OverlayPoc</AssemblyName>
   </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="Microsoft.VisualBasic" />
+  </ItemGroup>
 </Project>

@@ -16,6 +16,7 @@ internal sealed class SettingsForm : Form
     private readonly TextBox _systemPrompt = new();
     private readonly NumericUpDown _maxTokens = new();
     private readonly CheckBox _deselectAfterCopy = new();
+    private readonly TextBox _visionPrompt = new();
     private readonly Button _save = new();
     private readonly Button _cancel = new();
     private readonly Button _fetchModels = new();
@@ -37,7 +38,7 @@ internal sealed class SettingsForm : Form
         BackColor = Theme.Background;
         ForeColor = Theme.TextPrimary;
         Font = Theme.Body;
-        ClientSize = new Size(520, 640);
+        ClientSize = new Size(520, 720);
 
         BuildUi();
         LoadFromConfig();
@@ -51,7 +52,7 @@ internal sealed class SettingsForm : Form
         get
         {
             var cp = base.CreateParams;
-            cp.ExStyle |= NativeMethods.WS_EX_TOPMOST | NativeMethods.WS_EX_NOACTIVATE;
+            cp.ExStyle |= NativeMethods.WS_EX_TOPMOST;
             return cp;
         }
     }
@@ -62,13 +63,13 @@ internal sealed class SettingsForm : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 2,
-            RowCount = 10,
+            RowCount = 11,
             Padding = new Padding(16),
             BackColor = Theme.Background
         };
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 120));
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        for (var i = 0; i < 10; i++)
+        for (var i = 0; i < 11; i++)
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
         var row = 0;
@@ -129,12 +130,23 @@ internal sealed class SettingsForm : Form
         root.Controls.Add(MakeLabel("System Prompt"), 0, row);
         _systemPrompt.Dock = DockStyle.Fill;
         _systemPrompt.Multiline = true;
-        _systemPrompt.Height = 100;
+        _systemPrompt.Height = 80;
         _systemPrompt.BackColor = Theme.InputBackground;
         _systemPrompt.ForeColor = Theme.TextPrimary;
         _systemPrompt.BorderStyle = BorderStyle.FixedSingle;
         _systemPrompt.ScrollBars = ScrollBars.Vertical;
         root.Controls.Add(_systemPrompt, 1, row++);
+
+        // Vision Prompt
+        root.Controls.Add(MakeLabel("Vision Prompt"), 0, row);
+        _visionPrompt.Dock = DockStyle.Fill;
+        _visionPrompt.Multiline = true;
+        _visionPrompt.Height = 80;
+        _visionPrompt.BackColor = Theme.InputBackground;
+        _visionPrompt.ForeColor = Theme.TextPrimary;
+        _visionPrompt.BorderStyle = BorderStyle.FixedSingle;
+        _visionPrompt.ScrollBars = ScrollBars.Vertical;
+        root.Controls.Add(_visionPrompt, 1, row++);
 
         // Fetch models button
         root.Controls.Add(new Label(), 0, row);
@@ -148,7 +160,7 @@ internal sealed class SettingsForm : Form
         root.Controls.Add(_fetchModels, 1, row++);
 
         // Model list
-        root.Controls.Add(MakeLabel("Models"), 0, row);
+        root.Controls.Add(MakeLabel("Models (double-click = Model, Ctrl+V = Vision)"), 0, row);
         _modelList.Dock = DockStyle.Fill;
         _modelList.Height = 120;
         _modelList.BackColor = Theme.InputBackground;
@@ -158,6 +170,11 @@ internal sealed class SettingsForm : Form
         {
             if (_modelList.SelectedItem is string id)
                 _model.Text = id;
+        };
+        _modelList.KeyDown += (_, e) =>
+        {
+            if (e.KeyCode == Keys.V && e.Control && _modelList.SelectedItem is string id)
+                _visionModel.Text = id;
         };
         root.Controls.Add(_modelList, 1, row++);
 
@@ -207,6 +224,7 @@ internal sealed class SettingsForm : Form
         _model.Text = _config.Model;
         _visionModel.Text = _config.VisionModel ?? "";
         _systemPrompt.Text = _config.SystemPrompt;
+        _visionPrompt.Text = _config.VisionPrompt;
         _maxTokens.Value = Math.Clamp(_config.MaxTokens, 1, 128000);
         _deselectAfterCopy.Checked = _config.DeselectAfterCopy;
     }
@@ -218,6 +236,7 @@ internal sealed class SettingsForm : Form
         _config.Model = _model.Text.Trim();
         _config.VisionModel = string.IsNullOrWhiteSpace(_visionModel.Text) ? null : _visionModel.Text.Trim();
         _config.SystemPrompt = _systemPrompt.Text.Trim();
+        _config.VisionPrompt = _visionPrompt.Text.Trim();
         _config.MaxTokens = (int)_maxTokens.Value;
         _config.DeselectAfterCopy = _deselectAfterCopy.Checked;
 

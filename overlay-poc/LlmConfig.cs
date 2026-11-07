@@ -16,8 +16,15 @@ internal sealed class LlmConfig
         "You are a precise, objective assistant. Answer accurately and concisely. If you are not sure, say so instead of guessing.";
     public int MaxTokens { get; set; } = 2048;
 
-    /// <summary>Optional separate model for vision requests. When null, Model is used.</summary>
-    public string VisionModel { get; set; }
+    /// <summary>Model for vision/screenshot requests. Defaults to deepseek.</summary>
+    public string VisionModel { get; set; } = "deepseek/deepseek-chat-v3-0324";
+
+    /// <summary>Prompt used when sending a screenshot to the vision model.</summary>
+    public string VisionPrompt { get; set; } =
+        "Analyze this screenshot. If you see a question with multiple choice options: " +
+        "1. First line: state the answer as a numbered option (e.g., \"2. Option text\"). " +
+        "2. Keep the first line as brief as possible. " +
+        "3. If no question is visible, describe what you see concisely.";
 
     /// <summary>After copying the current selection, send Right Arrow to collapse
     /// the highlight so it does not linger on screen. Set false to disable.</summary>
@@ -56,7 +63,8 @@ internal static class LlmConfigLoader
                     if (!string.IsNullOrWhiteSpace(fromFile.Model)) config.Model = fromFile.Model;
                     if (!string.IsNullOrWhiteSpace(fromFile.SystemPrompt)) config.SystemPrompt = fromFile.SystemPrompt;
                     if (fromFile.MaxTokens > 0) config.MaxTokens = fromFile.MaxTokens;
-                    config.VisionModel = fromFile.VisionModel;
+                    if (!string.IsNullOrWhiteSpace(fromFile.VisionModel)) config.VisionModel = fromFile.VisionModel;
+                    if (!string.IsNullOrWhiteSpace(fromFile.VisionPrompt)) config.VisionPrompt = fromFile.VisionPrompt;
                     config.DeselectAfterCopy = fromFile.DeselectAfterCopy;
                     config.ApiKey = fromFile.ApiKey ?? "";
                 }

@@ -6,6 +6,18 @@ namespace OverlayPoc;
 
 internal sealed partial class OverlayForm
 {
+    // Throttle scroll-to-bottom during streaming (avoid layout stutter).
+    private DateTime _lastScrollTime = DateTime.MinValue;
+    private static readonly TimeSpan ScrollThrottle = TimeSpan.FromMilliseconds(50);
+
+    private void ScrollToBubbleThrottled(Panel bubble)
+    {
+        var now = DateTime.UtcNow;
+        if (now - _lastScrollTime < ScrollThrottle) return;
+        _lastScrollTime = now;
+        _messages.ScrollControlIntoView(bubble);
+    }
+
     private void SendMessage()
     {
         var text = _input.Text.Trim();
@@ -42,8 +54,9 @@ internal sealed partial class OverlayForm
         // Create a placeholder assistant bubble that we will update as tokens stream in.
         var bubble = AddStreamingBubble();
 
-        // Cancel any in-flight request.
+        // Cancel and dispose any in-flight request.
         _thinkingCts?.Cancel();
+        _thinkingCts?.Dispose();
         _thinkingCts = new CancellationTokenSource();
         var ct = _thinkingCts.Token;
 
@@ -67,7 +80,7 @@ internal sealed partial class OverlayForm
                     var label = bubble.Controls.OfType<Label>().FirstOrDefault();
                     if (label != null)
                         label.Text = current;
-                    _messages.ScrollControlIntoView(bubble);
+                    ScrollToBubbleThrottled(bubble);
                     _hud?.SetThinking(current);
                 }));
             }
@@ -84,6 +97,7 @@ internal sealed partial class OverlayForm
 
         // Final update.
         var finalText = fullText;
+        var wasError = fullText.StartsWith("Error:");
         BeginInvoke(new Action(() =>
         {
             if (!bubble.IsDisposed)
@@ -93,8 +107,9 @@ internal sealed partial class OverlayForm
                     label.Text = finalText;
             }
 
-            // Add the assistant message to the conversation.
-            if (_currentConversation != null && !string.IsNullOrWhiteSpace(finalText))
+            // Only add successful responses to conversation history.
+            // Error messages should not pollute the context for future requests.
+            if (!wasError && _currentConversation != null && !string.IsNullOrWhiteSpace(finalText))
                 _currentConversation.Messages.Add(new ChatMessage(true, finalText));
 
             _hud?.SetResponse(finalText);
@@ -144,6 +159,7 @@ internal sealed partial class OverlayForm
 
         _messages.Controls.Add(bubble);
         _messages.ScrollControlIntoView(bubble);
+        _lastScrollTime = DateTime.UtcNow;
 
         return bubble;
     }
@@ -161,6 +177,37 @@ internal sealed partial class OverlayForm
         SwitchToConversation(conversation);
     }
 
+    internal void DeleteConversation(ChatConversation conversation)
+    {
+        if (conversation is null || _conversations.Count <= 1) return;
+
+        _conversations.Remove(conversation);
+        _suppressHistorySelection = true;
+        _history.Items.Remove(conversation);
+        if (_history.Items.Count > 0)
+            _history.SelectedIndex = 0;
+        _suppressHistorySelection = false;
+
+        if (_history.SelectedItem is ChatConversation remaining)
+            SwitchToConversation(remaining);
+    }
+
+    internal void RenameConversation(ChatConversation conversation, string newTitle)
+    {
+        if (conversation is null || string.IsNullOrWhiteSpace(newTitle)) return;
+        conversation.Title = newTitle.Trim();
+
+        // Refresh the ListBox display
+        var index = _history.Items.IndexOf(conversation);
+        if (index >= 0)
+        {
+            _suppressHistorySelection = true;
+            _history.Items[index] = conversation;
+            _history.SelectedIndex = index;
+            _suppressHistorySelection = false;
+        }
+    }
+
     private void OnHistorySelectionChanged(object sender, EventArgs e)
     {
         if (_suppressHistorySelection || _history.SelectedIndex < 0) return;
@@ -168,6 +215,26 @@ internal sealed partial class OverlayForm
         var conversation = _history.SelectedItem as ChatConversation;
         if (conversation is not null)
             SwitchToConversation(conversation);
+    }
+
+    private void OnHistoryKeyDown(object sender, KeyEventArgs e)
+    {
+        if (_history.SelectedItem is not ChatConversation conversation) return;
+
+        if (e.KeyCode == Keys.Delete)
+        {
+            DeleteConversation(conversation);
+            e.Handled = true;
+        }
+        else if (e.KeyCode == Keys.F2)
+        {
+            // Simple inline rename via input box
+            var newTitle = Microsoft.VisualBasic.Interaction.InputBox(
+                "Rename conversation:", "Rename", conversation.Title);
+            if (!string.IsNullOrWhiteSpace(newTitle))
+                RenameConversation(conversation, newTitle);
+            e.Handled = true;
+        }
     }
 
     private void SwitchToConversation(ChatConversation conversation)
@@ -235,5 +302,6 @@ internal sealed partial class OverlayForm
 
         _messages.Controls.Add(bubble);
         _messages.ScrollControlIntoView(bubble);
+        _lastScrollTime = DateTime.UtcNow;
     }
 }

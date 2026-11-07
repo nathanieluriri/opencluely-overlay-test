@@ -133,6 +133,7 @@ internal sealed partial class OverlayForm
         _history.Font = Theme.BodySmall;
         _history.IntegralHeight = false;
         _history.SelectedIndexChanged += OnHistorySelectionChanged;
+        _history.KeyDown += OnHistoryKeyDown;
 
         sidebar.Controls.Add(_history);
         sidebar.Controls.Add(newConversation);

@@ -10,8 +10,9 @@ namespace OverlayPoc;
 
 /// <summary>
 /// Always-on-top overlay window. It is click-through and non-activating at
-/// all times. Ctrl+Shift+O toggles global keyboard capture — keystrokes flow
+/// all times. Ctrl+Shift+` toggles global keyboard capture — keystrokes flow
 /// into the chat input without the overlay ever stealing focus.
+/// Hotkeys are ONLY consumed when capture mode is enabled.
 /// </summary>
 internal sealed partial class OverlayForm : Form
 {
@@ -30,7 +31,6 @@ internal sealed partial class OverlayForm : Form
     private Button _interactiveButton;
     private ChatConversation _currentConversation;
     private Label _titleLabel;
-    private IntPtr _lastForegroundWindow;
     private string _lastForegroundTitle = "Waiting for active app";
     private Size _restoredSize = new(760, 620);
     private bool _captureHidden;
@@ -145,6 +145,9 @@ internal sealed partial class OverlayForm : Form
 
         ReleaseHook();
 
+        _thinkingCts?.Cancel();
+        _thinkingCts?.Dispose();
+
         _timer?.Stop();
 
         if (_tray != null)
@@ -174,10 +177,10 @@ internal sealed partial class OverlayForm : Form
             RaiseIfCovered();
         });
         menu.Items.Add("Raise now", null, (_, _) => RaiseIfCovered());
-        menu.Items.Add("Toggle keyboard capture (Ctrl+Shift+O)", null, (_, _) => ToggleInteractive());
-        menu.Items.Add("Toggle HUD (Ctrl+Shift+I)", null, (_, _) => ToggleHud());
-        menu.Items.Add("Toggle touch mode (Ctrl+Shift+Y)", null, (_, _) => ToggleTouchMode());
-        menu.Items.Add("Screenshot & ask (Ctrl+Shift+S)", null, (_, _) => _ = AskScreenshotAsync());
+        menu.Items.Add("Toggle keyboard capture (Ctrl+Shift+`)", null, (_, _) => ToggleInteractive());
+        menu.Items.Add("Toggle HUD (tray only)", null, (_, _) => ToggleHud());
+        menu.Items.Add("Toggle touch mode (tray only)", null, (_, _) => ToggleTouchMode());
+        menu.Items.Add("Screenshot & ask (Ctrl+Shift+S when capturing)", null, (_, _) => _ = AskScreenshotAsync());
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Settings…", null, (_, _) => ShowSettings());
         menu.Items.Add("Open log", null, (_, _) => OpenLog());
@@ -212,8 +215,9 @@ internal sealed partial class OverlayForm : Form
     {
         if (_hookId != IntPtr.Zero) return;
 
-        _hookId = SetWindowsHookEx(WH_KEYBOARD_LL, _hookProc,
-            IntPtr.Zero, 0);
+        // Use the actual module handle for WH_KEYBOARD_LL compatibility
+        var hMod = GetModuleHandle(null);
+        _hookId = SetWindowsHookEx(WH_KEYBOARD_LL, _hookProc, hMod, 0);
 
         if (_hookId == IntPtr.Zero)
         {
@@ -241,87 +245,46 @@ internal sealed partial class OverlayForm : Form
             return CallNextHookEx(_hookId, nCode, wParam, lParam);
 
         var kb = Marshal.PtrToStructure<KBDLLHOOKSTRUCT>(lParam);
+        var isKeyDown = wParam == (IntPtr)WM_KEYDOWN || wParam == (IntPtr)WM_SYSKEYDOWN;
 
-        // ── Ctrl+Shift+O toggles capture (always active) ──────────
-        if (kb.vkCode == VK_O
-            && (wParam == (IntPtr)WM_KEYDOWN || wParam == (IntPtr)WM_SYSKEYDOWN))
+        // ── Hotkeys are ONLY consumed when keyboard capture is enabled ──
+        // When capture is off, these pass through to the foreground app normally.
+        if (_keyboardCaptureEnabled && isKeyDown)
         {
             var ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
             var shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
-            if (ctrl && shift)
+
+            // ── Ctrl+Shift+` (backtick) toggles capture ──
+            if (kb.vkCode == VK_OEM_3 && ctrl && shift)
             {
                 BeginInvoke(new Action(() => ToggleInteractive()));
                 return (IntPtr)1;
             }
-        }
 
-        // ── Ctrl+Shift+I toggles HUD visibility ────────────────────
-        if (kb.vkCode == VK_I
-            && (wParam == (IntPtr)WM_KEYDOWN || wParam == (IntPtr)WM_SYSKEYDOWN))
-        {
-            var ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
-            var shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
-            if (ctrl && shift)
-            {
-                BeginInvoke(new Action(() => ToggleHud()));
-                return (IntPtr)1;
-            }
-        }
-
-        // ── Ctrl+Shift+X copies selection & asks ───────────────────
-        if (kb.vkCode == VK_X
-            && (wParam == (IntPtr)WM_KEYDOWN || wParam == (IntPtr)WM_SYSKEYDOWN))
-        {
-            var ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
-            var shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
-            if (ctrl && shift)
+            // ── Ctrl+Shift+X copies selection & asks ──
+            if (kb.vkCode == VK_X && ctrl && shift)
             {
                 BeginInvoke(new Action(() => _ = AskSelectionAsync()));
                 return (IntPtr)1;
             }
-        }
 
-        // ── Ctrl+Shift+Y toggles touch/interactive mode ────────────
-        if (kb.vkCode == VK_Y
-            && (wParam == (IntPtr)WM_KEYDOWN || wParam == (IntPtr)WM_SYSKEYDOWN))
-        {
-            var ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
-            var shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
-            if (ctrl && shift)
-            {
-                BeginInvoke(new Action(() => ToggleTouchMode()));
-                return (IntPtr)1;
-            }
-        }
-
-        // ── Ctrl+Shift+S captures screen & asks vision model ───────
-        if (kb.vkCode == VK_S
-            && (wParam == (IntPtr)WM_KEYDOWN || wParam == (IntPtr)WM_SYSKEYDOWN))
-        {
-            var ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
-            var shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
-            if (ctrl && shift)
+            // ── Ctrl+Shift+S captures screen & asks vision model ──
+            if (kb.vkCode == VK_S && ctrl && shift)
             {
                 BeginInvoke(new Action(() => _ = AskScreenshotAsync()));
                 return (IntPtr)1;
             }
-        }
 
-        if (!_keyboardCaptureEnabled)
-            return CallNextHookEx(_hookId, nCode, wParam, lParam);
+            // Never suppress modifier keys.
+            if (kb.vkCode is VK_SHIFT or VK_LSHIFT or VK_RSHIFT
+                or VK_CONTROL or VK_LCONTROL or VK_RCONTROL
+                or VK_MENU or VK_LMENU or VK_RMENU
+                or VK_LWIN or VK_RWIN
+                or VK_CAPITAL or VK_NUMLOCK or VK_SCROLL)
+            {
+                return CallNextHookEx(_hookId, nCode, wParam, lParam);
+            }
 
-        // Never suppress modifier keys.
-        if (kb.vkCode is VK_SHIFT or VK_LSHIFT or VK_RSHIFT
-            or VK_CONTROL or VK_LCONTROL or VK_RCONTROL
-            or VK_MENU or VK_LMENU or VK_RMENU
-            or VK_LWIN or VK_RWIN
-            or VK_CAPITAL or VK_NUMLOCK or VK_SCROLL)
-        {
-            return CallNextHookEx(_hookId, nCode, wParam, lParam);
-        }
-
-        if (wParam == (IntPtr)WM_KEYDOWN || wParam == (IntPtr)WM_SYSKEYDOWN)
-        {
             switch (kb.vkCode)
             {
                 case VK_RETURN:
@@ -399,7 +362,14 @@ internal sealed partial class OverlayForm : Form
     {
         if (_input.Text.Length > 0)
         {
-            _input.Text = _input.Text[..^1];
+            // Remove the last UTF-16 code unit, but if it's a low surrogate,
+            // also remove the preceding high surrogate to keep pairs intact.
+            var text = _input.Text;
+            var removeCount = 1;
+            if (text.Length >= 2 && char.IsLowSurrogate(text[^1]) && char.IsHighSurrogate(text[^2]))
+                removeCount = 2;
+
+            _input.Text = text[..^removeCount];
             _input.SelectionStart = _input.Text.Length;
             _input.ScrollToCaret();
             _hud?.SetTypingText(_input.Text);
@@ -408,7 +378,7 @@ internal sealed partial class OverlayForm : Form
 
     // ── Toggle keyboard capture ───────────────────────────────────────
 
-    private void ToggleInteractive()
+    internal void ToggleInteractive()
     {
         if (!IsHandleCreated || IsDisposed) return;
 
@@ -449,7 +419,6 @@ internal sealed partial class OverlayForm : Form
         var title = new StringBuilder(512);
         if (GetWindowText(foreground, title, title.Capacity) <= 0) return;
 
-        _lastForegroundWindow = foreground;
         _lastForegroundTitle = title.ToString();
         _status.Text = _lastForegroundTitle;
     }
@@ -467,8 +436,8 @@ internal sealed partial class OverlayForm : Form
         if (_titleLabel != null)
         {
             _titleLabel.Text = _keyboardCaptureEnabled
-                ? "Capturing  ·  typing goes to chat  ·  Ctrl+Shift+O or Esc to stop"
-                : "Focus chat  ·  Ctrl+Shift+O type  ·  Ctrl+Shift+I HUD  ·  Ctrl+Shift+X ask  ·  Ctrl+Shift+Y touch  ·  Ctrl+Shift+S screenshot";
+                ? "Capturing  ·  typing goes to chat  ·  Ctrl+Shift+` or Esc to stop"
+                : "Focus chat  ·  Ctrl+Shift+` type  ·  tray for HUD/touch  ·  Ctrl+Shift+X/S when capturing";
         }
     }
 
@@ -548,25 +517,33 @@ internal sealed partial class OverlayForm : Form
         }
     }
 
+    private SettingsForm _settingsForm;
+
     private void ShowSettings()
     {
-        // Show settings without changing focus — use ShowWindow with SW_SHOWNOACTIVATE.
-        var settings = new SettingsForm(_config);
-        settings.FormClosed += (_, args) =>
+        // Singleton — don't stack settings windows.
+        if (_settingsForm is { IsDisposed: false })
         {
-            if (settings.Saved)
+            ShowWindow(_settingsForm.Handle, SW_SHOWNOACTIVATE);
+            return;
+        }
+
+        _settingsForm = new SettingsForm(_config);
+        _settingsForm.FormClosed += (_, args) =>
+        {
+            if (_settingsForm.Saved)
             {
                 Program.Log($"Settings applied. model={_config.Model} vision={_config.VisionModel ?? "(same)"} hasKey={_config.HasApiKey}");
             }
-            settings.Dispose();
+            _settingsForm.Dispose();
+            _settingsForm = null;
         };
-        settings.Show();
-        ShowWindow(settings.Handle, SW_SHOWNOACTIVATE);
+        _settingsForm.Show(); // Show normally — settings form is interactive, user needs to click it
     }
 
     // ── HUD toggle (Ctrl+Shift+I) ─────────────────────────────────────
 
-    private void ToggleHud()
+    internal void ToggleHud()
     {
         if (_hud is null || _hud.IsDisposed) return;
 
@@ -587,7 +564,7 @@ internal sealed partial class OverlayForm : Form
 
     // ── Touch mode toggle (Ctrl+Shift+Y) ───────────────────────────────
 
-    private void ToggleTouchMode()
+    internal void ToggleTouchMode()
     {
         if (!IsHandleCreated || IsDisposed) return;
 
@@ -632,6 +609,13 @@ internal sealed partial class OverlayForm : Form
             keybd_event((byte)VK_CONTROL, 0, KEYEVENTF_KEYUP, IntPtr.Zero);
 
             await Task.Delay(80);
+
+            // Deselect after copy: send Right Arrow to collapse the highlight
+            if (_config.DeselectAfterCopy)
+            {
+                keybd_event((byte)VK_RIGHT, 0, 0, IntPtr.Zero);
+                keybd_event((byte)VK_RIGHT, 0, KEYEVENTF_KEYUP, IntPtr.Zero);
+            }
 
             string text = null;
             try
@@ -694,7 +678,7 @@ internal sealed partial class OverlayForm : Form
 
             // Add a text placeholder to conversation history; the actual
             // image is sent inline to the vision model.
-            var prompt = "Analyze this screenshot and describe what you see. If there's text, read it. If there's a problem, suggest a solution.";
+            var prompt = _config.VisionPrompt;
             _currentConversation!.Messages.Add(new ChatMessage(false, prompt));
             AddBubbleToUI("[Screenshot captured]", isAssistant: false);
 
@@ -710,7 +694,8 @@ internal sealed partial class OverlayForm : Form
     {
         try
         {
-            var bounds = Screen.PrimaryScreen?.Bounds ?? new Rectangle(0, 0, 1920, 1080);
+            // Capture ALL screens (virtual screen spans every monitor).
+            var bounds = SystemInformation.VirtualScreen;
             using var bitmap = new Bitmap(bounds.Width, bounds.Height);
             using var graphics = Graphics.FromImage(bitmap);
             graphics.CopyFromScreen(bounds.Location, Point.Empty, bounds.Size);
@@ -741,6 +726,7 @@ internal sealed partial class OverlayForm : Form
         var bubble = AddStreamingBubble();
 
         _thinkingCts?.Cancel();
+        _thinkingCts?.Dispose();
         _thinkingCts = new CancellationTokenSource();
         var ct = _thinkingCts.Token;
 
@@ -779,6 +765,7 @@ internal sealed partial class OverlayForm : Form
         }
 
         var finalText = fullText;
+        var wasError = fullText.StartsWith("Error:");
         BeginInvoke(new Action(() =>
         {
             if (!bubble.IsDisposed)
@@ -788,7 +775,8 @@ internal sealed partial class OverlayForm : Form
                     label.Text = finalText;
             }
 
-            if (_currentConversation != null && !string.IsNullOrWhiteSpace(finalText))
+            // Only add successful responses to conversation history.
+            if (!wasError && _currentConversation != null && !string.IsNullOrWhiteSpace(finalText))
                 _currentConversation.Messages.Add(new ChatMessage(true, finalText));
 
             _hud?.SetResponse(finalText);
