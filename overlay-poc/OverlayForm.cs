@@ -12,9 +12,8 @@ namespace OverlayPoc;
 
 /// <summary>
 /// Always-on-top overlay window. It is click-through and non-activating at
-/// all times. Ctrl+Shift+` toggles global keyboard capture — keystrokes flow
-/// into the chat input without the overlay ever stealing focus.
-/// Hotkeys are ONLY consumed when capture mode is enabled.
+/// all times. Action hotkeys (Ctrl+Shift+` / X / S / R) are always active
+/// globally; raw typing is captured only while keyboard capture is enabled.
 /// </summary>
 internal sealed partial class OverlayForm : Form
 {
@@ -195,7 +194,7 @@ internal sealed partial class OverlayForm : Form
         menu.Items.Add("Toggle keyboard capture (Ctrl+Shift+`)", null, (_, _) => ToggleInteractive());
         menu.Items.Add("Toggle HUD (tray only)", null, (_, _) => ToggleHud());
         menu.Items.Add("Toggle touch mode (tray only)", null, (_, _) => ToggleTouchMode());
-        menu.Items.Add("Screenshot & ask (Ctrl+Shift+S when capturing)", null, (_, _) => _ = AskScreenshotAsync());
+        menu.Items.Add("Screenshot & ask (Ctrl+Shift+S)", null, (_, _) => _ = AskScreenshotAsync());
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Ask with web search", null, (_, _) => AskWithSearch());
         menu.Items.Add("Dashboard…", null, (_, _) => ShowDashboard());
@@ -264,83 +263,88 @@ internal sealed partial class OverlayForm : Form
         var kb = Marshal.PtrToStructure<KBDLLHOOKSTRUCT>(lParam);
         var isKeyDown = wParam == (IntPtr)WM_KEYDOWN || wParam == (IntPtr)WM_SYSKEYDOWN;
 
-        // ── Hotkeys are ONLY consumed when keyboard capture is enabled ──
-        // When capture is off, these pass through to the foreground app normally.
-        if (_keyboardCaptureEnabled && isKeyDown)
+        // Only act on key-down so hotkeys fire once per press.
+        if (!isKeyDown)
+            return CallNextHookEx(_hookId, nCode, wParam, lParam);
+
+        var ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+        var shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+
+        // ── Global hotkeys: ALWAYS active, regardless of capture mode ──
+        // These combos are swallowed so they never reach the foreground app.
+
+        // Ctrl+Shift+` (backtick) toggles capture on/off.
+        if (kb.vkCode == VK_OEM_3 && ctrl && shift)
         {
-            var ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
-            var shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
-
-            // ── Ctrl+Shift+` (backtick) toggles capture ──
-            if (kb.vkCode == VK_OEM_3 && ctrl && shift)
-            {
-                BeginInvoke(new Action(() => ToggleInteractive()));
-                return (IntPtr)1;
-            }
-
-            // ── Ctrl+Shift+X copies selection & asks ──
-            if (kb.vkCode == VK_X && ctrl && shift)
-            {
-                BeginInvoke(new Action(() => _ = AskSelectionAsync()));
-                return (IntPtr)1;
-            }
-
-            // ── Ctrl+Shift+S captures screen & asks vision model ──
-            if (kb.vkCode == VK_S && ctrl && shift)
-            {
-                BeginInvoke(new Action(() => _ = AskScreenshotAsync()));
-                return (IntPtr)1;
-            }
-
-            // ── Ctrl+Shift+R asks with web search ──
-            if (kb.vkCode == VK_R && ctrl && shift)
-            {
-                BeginInvoke(new Action(() => AskWithSearch()));
-                return (IntPtr)1;
-            }
-
-            // Never suppress modifier keys.
-            if (kb.vkCode is VK_SHIFT or VK_LSHIFT or VK_RSHIFT
-                or VK_CONTROL or VK_LCONTROL or VK_RCONTROL
-                or VK_MENU or VK_LMENU or VK_RMENU
-                or VK_LWIN or VK_RWIN
-                or VK_CAPITAL or VK_NUMLOCK or VK_SCROLL)
-            {
-                return CallNextHookEx(_hookId, nCode, wParam, lParam);
-            }
-
-            switch (kb.vkCode)
-            {
-                case VK_RETURN:
-                    BeginInvoke(new Action(() => SendMessage()));
-                    return (IntPtr)1;
-
-                case VK_BACK:
-                    BeginInvoke(new Action(() => HandleBackspace()));
-                    return (IntPtr)1;
-
-                case VK_ESCAPE:
-                    BeginInvoke(new Action(() => ToggleInteractive()));
-                    return (IntPtr)1;
-
-                case VK_TAB:
-                    BeginInvoke(new Action(() => AppendToInput("\t")));
-                    return (IntPtr)1;
-
-                default:
-                {
-                    var text = VkToText(kb.vkCode, kb.scanCode);
-                    if (text.Length > 0)
-                    {
-                        BeginInvoke(new Action(() => AppendToInput(text)));
-                    }
-
-                    return (IntPtr)1;
-                }
-            }
+            BeginInvoke(new Action(() => ToggleInteractive()));
+            return (IntPtr)1;
         }
 
-        return CallNextHookEx(_hookId, nCode, wParam, lParam);
+        // Ctrl+Shift+X copies selection & asks.
+        if (kb.vkCode == VK_X && ctrl && shift)
+        {
+            BeginInvoke(new Action(() => _ = AskSelectionAsync()));
+            return (IntPtr)1;
+        }
+
+        // Ctrl+Shift+S captures screen & asks vision model.
+        if (kb.vkCode == VK_S && ctrl && shift)
+        {
+            BeginInvoke(new Action(() => _ = AskScreenshotAsync()));
+            return (IntPtr)1;
+        }
+
+        // Ctrl+Shift+R asks with web search.
+        if (kb.vkCode == VK_R && ctrl && shift)
+        {
+            BeginInvoke(new Action(() => AskWithSearch()));
+            return (IntPtr)1;
+        }
+
+        // ── Typing capture: ONLY when capture mode is enabled ──
+        // When capture is off, every other keystroke passes through normally.
+        if (!_keyboardCaptureEnabled)
+            return CallNextHookEx(_hookId, nCode, wParam, lParam);
+
+        // Never suppress modifier keys.
+        if (kb.vkCode is VK_SHIFT or VK_LSHIFT or VK_RSHIFT
+            or VK_CONTROL or VK_LCONTROL or VK_RCONTROL
+            or VK_MENU or VK_LMENU or VK_RMENU
+            or VK_LWIN or VK_RWIN
+            or VK_CAPITAL or VK_NUMLOCK or VK_SCROLL)
+        {
+            return CallNextHookEx(_hookId, nCode, wParam, lParam);
+        }
+
+        switch (kb.vkCode)
+        {
+            case VK_RETURN:
+                BeginInvoke(new Action(() => SendMessage()));
+                return (IntPtr)1;
+
+            case VK_BACK:
+                BeginInvoke(new Action(() => HandleBackspace()));
+                return (IntPtr)1;
+
+            case VK_ESCAPE:
+                BeginInvoke(new Action(() => ToggleInteractive()));
+                return (IntPtr)1;
+
+            case VK_TAB:
+                BeginInvoke(new Action(() => AppendToInput("\t")));
+                return (IntPtr)1;
+
+                default:
+            {
+                var text = VkToText(kb.vkCode, kb.scanCode);
+                if (text.Length > 0)
+                {
+                    BeginInvoke(new Action(() => AppendToInput(text)));
+                }
+
+                return (IntPtr)1;
+            }
+        }
     }
 
     private static string VkToText(uint vkCode, uint scanCode)
@@ -461,7 +465,7 @@ internal sealed partial class OverlayForm : Form
         {
             _titleLabel.Text = _keyboardCaptureEnabled
                 ? "Capturing  ·  typing goes to chat  ·  Ctrl+Shift+` or Esc to stop"
-                : "Focus chat  ·  Ctrl+Shift+` type  ·  Ctrl+Shift+X copy/ask  ·  Ctrl+Shift+S screenshot  ·  Ctrl+Shift+R research";
+                : "Hotkeys on  ·  Ctrl+Shift+` to type  ·  Ctrl+Shift+X copy/ask  ·  Ctrl+Shift+S screenshot  ·  Ctrl+Shift+R research";
         }
     }
 
