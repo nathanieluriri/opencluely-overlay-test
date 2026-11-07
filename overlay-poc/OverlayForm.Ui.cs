@@ -29,7 +29,7 @@ internal sealed partial class OverlayForm
         _titleLabel = new Label
         {
             AutoSize = true,
-            Text = "Focus chat  ·  Ctrl+Shift+` to type",
+            Text = "Focus chat  ·  Ctrl+Shift+O to type",
             ForeColor = Color.White,
             Font = Theme.Title,
             Location = new Point(18, 7)

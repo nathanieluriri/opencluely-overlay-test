@@ -12,7 +12,7 @@ namespace OverlayPoc;
 
 /// <summary>
 /// Always-on-top overlay window. It is click-through and non-activating at
-/// all times. Action hotkeys (Ctrl+Shift+` / X / S / R) are always active
+/// all times. Action hotkeys (Ctrl+Shift+O / I / Y / X / S / W) are always active
 /// globally; raw typing is captured only while keyboard capture is enabled.
 /// </summary>
 internal sealed partial class OverlayForm : Form
@@ -191,9 +191,9 @@ internal sealed partial class OverlayForm : Form
             RaiseIfCovered();
         });
         menu.Items.Add("Raise now", null, (_, _) => RaiseIfCovered());
-        menu.Items.Add("Toggle keyboard capture (Ctrl+Shift+`)", null, (_, _) => ToggleInteractive());
-        menu.Items.Add("Toggle HUD (tray only)", null, (_, _) => ToggleHud());
-        menu.Items.Add("Toggle touch mode (tray only)", null, (_, _) => ToggleTouchMode());
+        menu.Items.Add("Toggle keyboard capture (Ctrl+Shift+O)", null, (_, _) => ToggleInteractive());
+        menu.Items.Add("Toggle HUD (Ctrl+Shift+I)", null, (_, _) => ToggleHud());
+        menu.Items.Add("Toggle touch mode (Ctrl+Shift+Y)", null, (_, _) => ToggleTouchMode());
         menu.Items.Add("Screenshot & ask (Ctrl+Shift+S)", null, (_, _) => _ = AskScreenshotAsync());
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Ask with web search", null, (_, _) => AskWithSearch());
@@ -273,10 +273,24 @@ internal sealed partial class OverlayForm : Form
         // ── Global hotkeys: ALWAYS active, regardless of capture mode ──
         // These combos are swallowed so they never reach the foreground app.
 
-        // Ctrl+Shift+` (backtick) toggles capture on/off.
-        if (kb.vkCode == VK_OEM_3 && ctrl && shift)
+        // Ctrl+Shift+O toggles capture on/off.
+        if (kb.vkCode == VK_O && ctrl && shift)
         {
             BeginInvoke(new Action(() => ToggleInteractive()));
+            return (IntPtr)1;
+        }
+
+        // Ctrl+Shift+I toggles HUD visibility.
+        if (kb.vkCode == VK_I && ctrl && shift)
+        {
+            BeginInvoke(new Action(() => ToggleHud()));
+            return (IntPtr)1;
+        }
+
+        // Ctrl+Shift+Y toggles touch/interactive mode.
+        if (kb.vkCode == VK_Y && ctrl && shift)
+        {
+            BeginInvoke(new Action(() => ToggleTouchMode()));
             return (IntPtr)1;
         }
 
@@ -294,8 +308,8 @@ internal sealed partial class OverlayForm : Form
             return (IntPtr)1;
         }
 
-        // Ctrl+Shift+R asks with web search.
-        if (kb.vkCode == VK_R && ctrl && shift)
+        // Ctrl+Shift+W asks with web search.
+        if (kb.vkCode == VK_W && ctrl && shift)
         {
             BeginInvoke(new Action(() => AskWithSearch()));
             return (IntPtr)1;
@@ -464,8 +478,8 @@ internal sealed partial class OverlayForm : Form
         if (_titleLabel != null)
         {
             _titleLabel.Text = _keyboardCaptureEnabled
-                ? "Capturing  ·  typing goes to chat  ·  Ctrl+Shift+` or Esc to stop"
-                : "Hotkeys on  ·  Ctrl+Shift+` to type  ·  Ctrl+Shift+X copy/ask  ·  Ctrl+Shift+S screenshot  ·  Ctrl+Shift+R research";
+                ? "Capturing  ·  typing goes to chat  ·  Ctrl+Shift+O or Esc to stop"
+                : "Hotkeys on  ·  Ctrl+Shift+O to type  ·  Ctrl+Shift+I HUD  ·  Ctrl+Shift+Y touch  ·  Ctrl+Shift+X copy/ask  ·  Ctrl+Shift+S screenshot  ·  Ctrl+Shift+W research";
         }
     }
 
