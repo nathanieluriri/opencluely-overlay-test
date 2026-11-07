@@ -16,6 +16,9 @@ internal sealed class LlmConfig
         "You are a precise, objective assistant. Answer accurately and concisely. If you are not sure, say so instead of guessing.";
     public int MaxTokens { get; set; } = 2048;
 
+    /// <summary>Optional separate model for vision requests. When null, Model is used.</summary>
+    public string VisionModel { get; set; }
+
     /// <summary>After copying the current selection, send Right Arrow to collapse
     /// the highlight so it does not linger on screen. Set false to disable.</summary>
     public bool DeselectAfterCopy { get; set; } = true;
@@ -53,6 +56,7 @@ internal static class LlmConfigLoader
                     if (!string.IsNullOrWhiteSpace(fromFile.Model)) config.Model = fromFile.Model;
                     if (!string.IsNullOrWhiteSpace(fromFile.SystemPrompt)) config.SystemPrompt = fromFile.SystemPrompt;
                     if (fromFile.MaxTokens > 0) config.MaxTokens = fromFile.MaxTokens;
+                    config.VisionModel = fromFile.VisionModel;
                     config.DeselectAfterCopy = fromFile.DeselectAfterCopy;
                     config.ApiKey = fromFile.ApiKey ?? "";
                 }

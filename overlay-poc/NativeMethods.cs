@@ -26,6 +26,16 @@ internal static class NativeMethods
     internal const uint GW_HWNDPREV = 3;
     internal const uint WDA_EXCLUDEFROMCAPTURE = 0x00000011;
 
+    // ShowWindow commands (no focus change)
+    internal const int SW_SHOWNOACTIVATE = 4;
+    internal const int SW_HIDE = 0;
+
+    [DllImport("user32.dll")]
+    internal static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+    [DllImport("user32.dll")]
+    internal static extern IntPtr GetShellWindow();
+
     internal const int WM_NCLBUTTONDOWN = 0x00A1;
     internal const int HTCAPTION = 2;
 
@@ -77,6 +87,7 @@ internal static class NativeMethods
     internal const int VK_RCONTROL = 0xA3;
     internal const int VK_LMENU = 0xA4;
     internal const int VK_RMENU = 0xA5;
+    internal const int VK_S = 0x53;
 
     [StructLayout(LayoutKind.Sequential)]
     internal struct KBDLLHOOKSTRUCT
@@ -112,11 +123,11 @@ internal static class NativeMethods
 
     // ── Existing window-management declarations ────────────────────────
 
-    [DllImport("user32.dll", SetLastError = true)]
-    internal static extern int GetWindowLong(IntPtr hWnd, int nIndex);
+    [DllImport("user32.dll", SetLastError = true, EntryPoint = "GetWindowLongPtrW")]
+    internal static extern IntPtr GetWindowLongPtr(IntPtr hWnd, int nIndex);
 
-    [DllImport("user32.dll", SetLastError = true)]
-    internal static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
+    [DllImport("user32.dll", SetLastError = true, EntryPoint = "SetWindowLongPtrW")]
+    internal static extern IntPtr SetWindowLongPtr(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
 
     [DllImport("user32.dll", SetLastError = true)]
     internal static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter,
@@ -156,13 +167,15 @@ internal static class NativeMethods
     internal const uint KEYEVENTF_EXTENDEDKEY = 0x0001;
 
     [DllImport("user32.dll")]
-    internal static extern bool OpenClipboard(IntPtr hWndNewOwner);
+    internal static extern bool GetCursorPos(out POINT lpPoint);
 
     [DllImport("user32.dll")]
-    internal static extern bool CloseClipboard();
+    internal static extern IntPtr WindowFromPoint(POINT Point);
 
-    [DllImport("user32.dll")]
-    internal static extern IntPtr GetClipboardData(uint uFormat);
-
-    internal const uint CF_UNICODETEXT = 13;
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct POINT
+    {
+        public int X;
+        public int Y;
+    }
 }

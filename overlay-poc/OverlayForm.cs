@@ -135,9 +135,7 @@ internal sealed partial class OverlayForm : Form
     {
         base.OnShown(e);
         Program.Log("FORM shown");
-        _tray.ShowBalloonTip(3000, "Focus chat",
-            "Ctrl+Shift+O captures typing  ·  Ctrl+Shift+I toggles HUD  ·  Ctrl+Shift+X asks  ·  Ctrl+Shift+Y touch mode",
-            ToolTipIcon.Info);
+        // No balloon tip — it can steal focus on some Windows versions.
         UpdateFocusTarget();
     }
 
@@ -172,13 +170,16 @@ internal sealed partial class OverlayForm : Form
         var menu = new ContextMenuStrip();
         menu.Items.Add("Show overlay", null, (_, _) =>
         {
-            Show();
+            ShowWindow(Handle, SW_SHOWNOACTIVATE);
             RaiseIfCovered();
         });
         menu.Items.Add("Raise now", null, (_, _) => RaiseIfCovered());
         menu.Items.Add("Toggle keyboard capture (Ctrl+Shift+O)", null, (_, _) => ToggleInteractive());
         menu.Items.Add("Toggle HUD (Ctrl+Shift+I)", null, (_, _) => ToggleHud());
         menu.Items.Add("Toggle touch mode (Ctrl+Shift+Y)", null, (_, _) => ToggleTouchMode());
+        menu.Items.Add("Screenshot & ask (Ctrl+Shift+S)", null, (_, _) => _ = AskScreenshotAsync());
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add("Settings…", null, (_, _) => ShowSettings());
         menu.Items.Add("Open log", null, (_, _) => OpenLog());
         menu.Items.Add("Exit", null, (_, _) => Close());
 
@@ -293,6 +294,19 @@ internal sealed partial class OverlayForm : Form
             }
         }
 
+        // ── Ctrl+Shift+S captures screen & asks vision model ───────
+        if (kb.vkCode == VK_S
+            && (wParam == (IntPtr)WM_KEYDOWN || wParam == (IntPtr)WM_SYSKEYDOWN))
+        {
+            var ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+            var shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+            if (ctrl && shift)
+            {
+                BeginInvoke(new Action(() => _ = AskScreenshotAsync()));
+                return (IntPtr)1;
+            }
+        }
+
         if (!_keyboardCaptureEnabled)
             return CallNextHookEx(_hookId, nCode, wParam, lParam);
 
@@ -376,6 +390,9 @@ internal sealed partial class OverlayForm : Form
         _input.Text += text;
         _input.SelectionStart = _input.Text.Length;
         _input.ScrollToCaret();
+
+        // Live preview on the HUD typing bar.
+        _hud?.SetTypingText(_input.Text);
     }
 
     private void HandleBackspace()
@@ -385,6 +402,7 @@ internal sealed partial class OverlayForm : Form
             _input.Text = _input.Text[..^1];
             _input.SelectionStart = _input.Text.Length;
             _input.ScrollToCaret();
+            _hud?.SetTypingText(_input.Text);
         }
     }
 
@@ -399,6 +417,11 @@ internal sealed partial class OverlayForm : Form
         Program.Log(_keyboardCaptureEnabled
             ? "Keyboard capture ENABLED"
             : "Keyboard capture DISABLED");
+
+        // Show/hide the typing preview bar on the HUD.
+        _hud?.SetTypingVisible(_keyboardCaptureEnabled);
+        if (!_keyboardCaptureEnabled)
+            _hud?.ClearTyping();
 
         // The window NEVER changes style — it stays transparent and
         // click-through regardless of capture state.
@@ -445,7 +468,7 @@ internal sealed partial class OverlayForm : Form
         {
             _titleLabel.Text = _keyboardCaptureEnabled
                 ? "Capturing  ·  typing goes to chat  ·  Ctrl+Shift+O or Esc to stop"
-                : "Focus chat  ·  Ctrl+Shift+O type  ·  Ctrl+Shift+I HUD  ·  Ctrl+Shift+X ask  ·  Ctrl+Shift+Y touch";
+                : "Focus chat  ·  Ctrl+Shift+O type  ·  Ctrl+Shift+I HUD  ·  Ctrl+Shift+X ask  ·  Ctrl+Shift+Y touch  ·  Ctrl+Shift+S screenshot";
         }
     }
 
@@ -465,6 +488,7 @@ internal sealed partial class OverlayForm : Form
     private void BeginDrag(object sender, MouseEventArgs e)
     {
         if (e.Button != MouseButtons.Left) return;
+        if (!_touchMode) return; // click-through in normal mode, so no drag anyway
 
         ReleaseCapture();
         NativeMethods.SendMessage(Handle, WM_NCLBUTTONDOWN, (IntPtr)HTCAPTION, IntPtr.Zero);
@@ -524,6 +548,22 @@ internal sealed partial class OverlayForm : Form
         }
     }
 
+    private void ShowSettings()
+    {
+        // Show settings without changing focus — use ShowWindow with SW_SHOWNOACTIVATE.
+        var settings = new SettingsForm(_config);
+        settings.FormClosed += (_, args) =>
+        {
+            if (settings.Saved)
+            {
+                Program.Log($"Settings applied. model={_config.Model} vision={_config.VisionModel ?? "(same)"} hasKey={_config.HasApiKey}");
+            }
+            settings.Dispose();
+        };
+        settings.Show();
+        ShowWindow(settings.Handle, SW_SHOWNOACTIVATE);
+    }
+
     // ── HUD toggle (Ctrl+Shift+I) ─────────────────────────────────────
 
     private void ToggleHud()
@@ -532,15 +572,15 @@ internal sealed partial class OverlayForm : Form
 
         if (_hud.Visible)
         {
-            _hud.Hide();
-            Show();
+            ShowWindow(_hud.Handle, SW_HIDE);
+            ShowWindow(Handle, SW_SHOWNOACTIVATE);
             RaiseIfCovered();
             Program.Log("HUD hidden, overlay shown");
         }
         else
         {
-            Hide();
-            _hud.Show();
+            ShowWindow(Handle, SW_HIDE);
+            ShowWindow(_hud.Handle, SW_SHOWNOACTIVATE);
             Program.Log("HUD shown, overlay hidden");
         }
     }
@@ -553,7 +593,7 @@ internal sealed partial class OverlayForm : Form
 
         _touchMode = !_touchMode;
 
-        var exStyle = GetWindowLong(Handle, GWL_EXSTYLE);
+        var exStyle = (int)(long)GetWindowLongPtr(Handle, GWL_EXSTYLE);
 
         if (_touchMode)
         {
@@ -568,14 +608,14 @@ internal sealed partial class OverlayForm : Form
             Program.Log("Touch mode OFF — overlay is click-through");
         }
 
-        SetWindowLong(Handle, GWL_EXSTYLE, exStyle);
+        SetWindowLongPtr(Handle, GWL_EXSTYLE, (IntPtr)exStyle);
         SetWindowPos(Handle, IntPtr.Zero, 0, 0, 0, 0,
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
 
         UpdateInteractionVisuals();
     }
 
-    // ── Ask selection (Ctrl+Shift+V) ───────────────────────────────────
+    // ── Ask selection (Ctrl+Shift+X) ───────────────────────────────────
 
     private async Task AskSelectionAsync()
     {
@@ -627,4 +667,131 @@ internal sealed partial class OverlayForm : Form
         }
     }
 
+    // ── Ask screenshot (Ctrl+Shift+S) ──────────────────────────────────
+
+    private async Task AskScreenshotAsync()
+    {
+        try
+        {
+            Program.Log("AskScreenshot: capturing screen");
+
+            // Release Shift first so the screenshot doesn't include the
+            // modifier state in any on-screen indicators.
+            keybd_event((byte)VK_SHIFT, 0, KEYEVENTF_KEYUP, IntPtr.Zero);
+            await Task.Delay(10);
+
+            var imageBase64 = CaptureScreenBase64();
+            if (string.IsNullOrEmpty(imageBase64))
+            {
+                Program.Log("AskScreenshot: capture failed");
+                return;
+            }
+
+            Program.Log($"AskScreenshot: got {imageBase64.Length} base64 chars");
+
+            if (_currentConversation is null)
+                StartConversation();
+
+            // Add a text placeholder to conversation history; the actual
+            // image is sent inline to the vision model.
+            var prompt = "Analyze this screenshot and describe what you see. If there's text, read it. If there's a problem, suggest a solution.";
+            _currentConversation!.Messages.Add(new ChatMessage(false, prompt));
+            AddBubbleToUI("[Screenshot captured]", isAssistant: false);
+
+            await SendMessageWithImageAsync(prompt, imageBase64);
+        }
+        catch (Exception ex)
+        {
+            Program.Log("AskScreenshot error: " + ex);
+        }
+    }
+
+    private static string CaptureScreenBase64()
+    {
+        try
+        {
+            var bounds = Screen.PrimaryScreen?.Bounds ?? new Rectangle(0, 0, 1920, 1080);
+            using var bitmap = new Bitmap(bounds.Width, bounds.Height);
+            using var graphics = Graphics.FromImage(bitmap);
+            graphics.CopyFromScreen(bounds.Location, Point.Empty, bounds.Size);
+
+            using var ms = new MemoryStream();
+            bitmap.Save(ms, System.Drawing.Imaging.ImageFormat.Png);
+            return Convert.ToBase64String(ms.ToArray());
+        }
+        catch (Exception ex)
+        {
+            Program.Log("CaptureScreenBase64 failed: " + ex.Message);
+            return "";
+        }
+    }
+
+    private async Task SendMessageWithImageAsync(string text, string imageBase64)
+    {
+        if (!_config.HasApiKey)
+        {
+            AddBubbleToUI("No API key configured. Set OPENROUTER_API_KEY environment variable or create\r\n" +
+                          $"{LlmConfigLoader.ConfigPath} with an \"ApiKey\" field.", isAssistant: true);
+            return;
+        }
+
+        if (_currentConversation is null)
+            StartConversation();
+
+        var bubble = AddStreamingBubble();
+
+        _thinkingCts?.Cancel();
+        _thinkingCts = new CancellationTokenSource();
+        var ct = _thinkingCts.Token;
+
+        _hud?.SetThinking();
+
+        var fullText = "";
+        try
+        {
+            var conversation = _currentConversation!;
+
+            await foreach (var delta in OpenRouterClient.StreamWithImageAsync(
+                               conversation.Messages, imageBase64, _config, ct))
+            {
+                fullText += delta;
+
+                var current = fullText;
+                BeginInvoke(new Action(() =>
+                {
+                    if (bubble.IsDisposed) return;
+                    var label = bubble.Controls.OfType<Label>().FirstOrDefault();
+                    if (label != null)
+                        label.Text = current;
+                    _messages.ScrollControlIntoView(bubble);
+                    _hud?.SetThinking(current);
+                }));
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            fullText += "\r\n\r\n[cancelled]";
+        }
+        catch (Exception ex)
+        {
+            fullText = $"Error: {ex.Message}";
+            Program.Log("LLM vision error: " + ex);
+        }
+
+        var finalText = fullText;
+        BeginInvoke(new Action(() =>
+        {
+            if (!bubble.IsDisposed)
+            {
+                var label = bubble.Controls.OfType<Label>().FirstOrDefault();
+                if (label != null)
+                    label.Text = finalText;
+            }
+
+            if (_currentConversation != null && !string.IsNullOrWhiteSpace(finalText))
+                _currentConversation.Messages.Add(new ChatMessage(true, finalText));
+
+            _hud?.SetResponse(finalText);
+        }));
+    }
 }

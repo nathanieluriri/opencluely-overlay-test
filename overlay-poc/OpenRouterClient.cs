@@ -13,7 +13,26 @@ internal static class OpenRouterClient
     private sealed class Message
     {
         public string role { get; set; } = "";
-        public string content { get; set; } = "";
+        public object content { get; set; } = "";
+    }
+
+    private sealed class ContentPart
+    {
+        public string type { get; set; } = "";
+        public string text { get; set; }
+        public ImageUrl image_url { get; set; }
+
+        public static ContentPart Text(string text) => new() { type = "text", text = text };
+        public static ContentPart Image(string base64Png) => new()
+        {
+            type = "image_url",
+            image_url = new ImageUrl { url = "data:image/png;base64," + base64Png }
+        };
+    }
+
+    private sealed class ImageUrl
+    {
+        public string url { get; set; } = "";
     }
 
     private sealed class Request
@@ -83,6 +102,84 @@ internal static class OpenRouterClient
         };
 
         return JsonSerializer.Serialize(request);
+    }
+
+    private static string BuildVisionRequestBody(
+        IReadOnlyList<ChatMessage> conversation,
+        string imageBase64,
+        LlmConfig config)
+    {
+        var messages = new List<Message>();
+
+        if (!string.IsNullOrWhiteSpace(config.SystemPrompt))
+            messages.Add(new Message { role = "system", content = config.SystemPrompt });
+
+        // History as plain text
+        foreach (var m in conversation.Take(conversation.Count - 1))
+            messages.Add(new Message { role = m.IsAssistant ? "assistant" : "user", content = m.Text });
+
+        // Last user message gets the image attached
+        var last = conversation[^1];
+        messages.Add(new Message
+        {
+            role = "user",
+            content = new List<ContentPart>
+            {
+                ContentPart.Text(last.Text),
+                ContentPart.Image(imageBase64)
+            }
+        });
+
+        var request = new Request
+        {
+            model = config.VisionModel ?? config.Model,
+            messages = messages,
+            max_tokens = config.MaxTokens > 0 ? config.MaxTokens : 2048
+        };
+
+        return JsonSerializer.Serialize(request);
+    }
+
+    public static async IAsyncEnumerable<string> StreamWithImageAsync(
+        IReadOnlyList<ChatMessage> conversation,
+        string imageBase64,
+        LlmConfig config,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
+    {
+        using var client = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
+
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"{config.BaseUrl.TrimEnd('/')}/chat/completions");
+
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", config.ApiKey);
+        request.Headers.TryAddWithoutValidation("HTTP-Referer", "https://overlaypoc.local");
+        request.Headers.TryAddWithoutValidation("X-Title", "OverlayPoc");
+        request.Content = new StringContent(BuildVisionRequestBody(conversation, imageBase64, config), Encoding.UTF8, "application/json");
+
+        using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+        if (!response.IsSuccessStatusCode)
+        {
+            var body = await response.Content.ReadAsStringAsync(ct);
+            throw new ApplicationException($"OpenRouter {(int)response.StatusCode}: {Truncate(body, 300)}");
+        }
+
+        using var stream = await response.Content.ReadAsStreamAsync(ct);
+        using var reader = new StreamReader(stream);
+
+        string line;
+        while ((line = await reader.ReadLineAsync(ct)) is not null)
+        {
+            if (!line.StartsWith("data:")) continue;
+
+            var data = line.Substring(5).Trim();
+            if (data.Length == 0) continue;
+            if (data == "[DONE]") yield break;
+
+            var delta = ExtractDelta(data);
+            if (delta is not null)
+                yield return delta;
+        }
     }
 
     private static string ExtractDelta(string data)

@@ -12,6 +12,7 @@ internal sealed partial class OverlayForm
         if (string.IsNullOrWhiteSpace(text)) return;
 
         _input.Clear();
+        _hud?.SetTypingText("");
 
         if (_currentConversation is null)
             StartConversation();

@@ -51,19 +51,7 @@ internal static class Program
     {
         var text = ex?.ToString() ?? "Unknown fatal error";
         Log("FATAL: " + text);
-
-        try
-        {
-            MessageBox.Show(
-                "OverlayPoc failed to start:\n\n" + (ex?.Message ?? text) +
-                "\n\nFull log:\n" + LogPath,
-                "OverlayPoc",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Error);
-        }
-        catch
-        {
-            // Nothing else we can do.
-        }
+        // No MessageBox — the app is already crashing, and a dialog
+        // would steal focus from whatever the user is doing.
     }
 }
