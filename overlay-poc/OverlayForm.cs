@@ -12,7 +12,7 @@ namespace OverlayPoc;
 
 /// <summary>
 /// Always-on-top overlay window. It is click-through and non-activating at
-/// all times. Action hotkeys (Ctrl+Shift+O / I / Y / X / S / W) are always active
+/// all times. Action hotkeys (Ctrl+Shift+O / L / I / Y / X / S / W) are always active
 /// globally; raw typing is captured only while keyboard capture is enabled.
 /// </summary>
 internal sealed partial class OverlayForm : Form
@@ -53,6 +53,12 @@ internal sealed partial class OverlayForm : Form
     private bool _keyboardCaptureEnabled;
     private IntPtr _hookId = IntPtr.Zero;
     private readonly LowLevelKeyboardProc _hookProc;
+    private bool _speechHotkeyDown;
+    private SpeechInputService _speechInput;
+    private ToolStripMenuItem _listenMenuItem;
+    private bool _speechStarting;
+    private bool _speechStopping;
+    private string _speechPrefix = "";
 
     public OverlayForm()
     {
@@ -177,6 +183,9 @@ internal sealed partial class OverlayForm : Form
             _hud.Dispose();
         }
 
+        if (_speechInput != null)
+            _ = DisposeSpeechInputOnCloseAsync(_speechInput);
+
         base.OnFormClosed(e);
     }
 
@@ -192,6 +201,9 @@ internal sealed partial class OverlayForm : Form
         });
         menu.Items.Add("Raise now", null, (_, _) => RaiseIfCovered());
         menu.Items.Add("Toggle keyboard capture (Ctrl+Shift+O)", null, (_, _) => ToggleInteractive());
+        _listenMenuItem = new ToolStripMenuItem("Start listening (Ctrl+Shift+L)");
+        _listenMenuItem.Click += async (_, _) => await ToggleSpeechInputAsync();
+        menu.Items.Add(_listenMenuItem);
         menu.Items.Add("Toggle HUD (Ctrl+Shift+I)", null, (_, _) => ToggleHud());
         menu.Items.Add("Toggle touch mode (Ctrl+Shift+Y)", null, (_, _) => ToggleTouchMode());
         menu.Items.Add("Screenshot & ask (Ctrl+Shift+S)", null, (_, _) => _ = AskScreenshotAsync());
@@ -262,6 +274,10 @@ internal sealed partial class OverlayForm : Form
 
         var kb = Marshal.PtrToStructure<KBDLLHOOKSTRUCT>(lParam);
         var isKeyDown = wParam == (IntPtr)WM_KEYDOWN || wParam == (IntPtr)WM_SYSKEYDOWN;
+        var isKeyUp = wParam == (IntPtr)WM_KEYUP || wParam == (IntPtr)WM_SYSKEYUP;
+
+        if (kb.vkCode == VK_L && isKeyUp)
+            _speechHotkeyDown = false;
 
         // Only act on key-down so hotkeys fire once per press.
         if (!isKeyDown)
@@ -272,6 +288,13 @@ internal sealed partial class OverlayForm : Form
 
         // ── Global hotkeys: ALWAYS active, regardless of capture mode ──
         // These combos are swallowed so they never reach the foreground app.
+
+        if (kb.vkCode == VK_L && ctrl && shift && !_speechHotkeyDown)
+        {
+            _speechHotkeyDown = true;
+            BeginInvoke(new Action(() => _ = ToggleSpeechInputAsync()));
+            return (IntPtr)1;
+        }
 
         // Ctrl+Shift+O toggles capture on/off.
         if (kb.vkCode == VK_O && ctrl && shift)
@@ -479,7 +502,7 @@ internal sealed partial class OverlayForm : Form
         {
             _titleLabel.Text = _keyboardCaptureEnabled
                 ? "Capturing  ·  typing goes to chat  ·  Ctrl+Shift+O or Esc to stop"
-                : "Hotkeys on  ·  Ctrl+Shift+O to type  ·  Ctrl+Shift+I HUD  ·  Ctrl+Shift+Y touch  ·  Ctrl+Shift+X copy/ask  ·  Ctrl+Shift+S screenshot  ·  Ctrl+Shift+W research";
+                : "Hotkeys on  ·  Ctrl+Shift+O to type  ·  Ctrl+Shift+L to listen  ·  Ctrl+Shift+I HUD  ·  Ctrl+Shift+Y touch  ·  Ctrl+Shift+X copy/ask  ·  Ctrl+Shift+S screenshot  ·  Ctrl+Shift+W research";
         }
     }
 

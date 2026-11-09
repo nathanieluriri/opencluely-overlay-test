@@ -45,7 +45,9 @@ internal static class NativeMethods
 
     internal const int WH_KEYBOARD_LL = 13;
     internal const int WM_KEYDOWN = 0x0100;
+    internal const int WM_KEYUP = 0x0101;
     internal const int WM_SYSKEYDOWN = 0x0104;
+    internal const int WM_SYSKEYUP = 0x0105;
 
     internal const uint KEYEVENTF_KEYUP = 0x0002;
 
@@ -58,6 +60,7 @@ internal static class NativeMethods
     internal const int VK_PAUSE = 0x13;
     internal const int VK_CAPITAL = 0x14;
     internal const int VK_O = 0x4F;
+    internal const int VK_L = 0x4C;
     internal const int VK_ESCAPE = 0x1B;
     internal const int VK_I = 0x49;
     internal const int VK_V = 0x56;
